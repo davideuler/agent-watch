@@ -217,11 +217,10 @@ function setProjectUrl(slug: string, mode: 'push' | 'replace' = 'push'): void {
   history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', url);
 }
 
-async function loadProjectsList() {
-  const data = await api<{ projects: ProjectListItem[]; default: string }>('/api/projects');
+function renderProjectsList(projects: ProjectListItem[]): void {
   const tabsEl = $('#project-tabs')!;
   tabsEl.innerHTML = '';
-  for (const p of data.projects) {
+  for (const p of projects) {
     const btn = document.createElement('button');
     btn.className = 'tab-btn';
     btn.textContent = p.name;
@@ -229,10 +228,6 @@ async function loadProjectsList() {
     btn.addEventListener('click', () => switchProject(p.slug));
     tabsEl.appendChild(btn);
   }
-  const known = new Set(data.projects.map((p) => p.slug));
-  const initial = projectSlugFromUrl() || data.default;
-  const slug = known.has(initial) ? initial : data.default;
-  await switchProject(slug, 'replace');
 }
 
 async function switchProject(slug: string, urlMode: 'push' | 'replace' = 'push') {
@@ -254,6 +249,11 @@ async function renderProject() {
     versionsEl.innerHTML = `<div class="empty">Failed to load project: ${(err as Error).message}</div>`;
     return;
   }
+  applyProjectDetail(data);
+}
+
+function applyProjectDetail(data: ProjectDetail): void {
+  const versionsEl = $('#versions')!;
   $('#project-title')!.textContent = `${data.project.name} release powers`;
   const meta = $('#project-meta')!;
   meta.innerHTML = `<a href="${data.project.github_url}" target="_blank" rel="noreferrer">${escapeHtml(data.project.github_repo)}</a> · ${data.versions.length} versions mapped`;
@@ -429,6 +429,48 @@ window.addEventListener('popstate', () => {
   if (slug && slug !== state.currentSlug) switchProject(slug, 'replace');
 });
 
-loadAuth().then(loadProjectsList).catch((err) => {
-  $('#versions')!.innerHTML = `<div class="empty">Bootstrap failed: ${(err as Error).message}</div>`;
-});
+async function bootstrap(): Promise<void> {
+  const initialSlug = projectSlugFromUrl();
+
+  // Auth + projects list run independently — fire in parallel.
+  // If the URL hints at a slug, also fire the detail call speculatively;
+  // it's cheap to throw away if the slug is invalid and saves an RTT when valid.
+  const authPromise = loadAuth();
+  const projectsPromise = api<{ projects: ProjectListItem[]; default: string }>('/api/projects');
+  const speculativeDetail = initialSlug
+    ? api<ProjectDetail>(`/api/projects/${encodeURIComponent(initialSlug)}`).catch(() => null)
+    : null;
+
+  let projectsData: { projects: ProjectListItem[]; default: string };
+  try {
+    projectsData = await projectsPromise;
+  } catch (err) {
+    $('#versions')!.innerHTML = `<div class="empty">Bootstrap failed: ${(err as Error).message}</div>`;
+    await authPromise;
+    return;
+  }
+
+  renderProjectsList(projectsData.projects);
+
+  const known = new Set(projectsData.projects.map((p) => p.slug));
+  const slug = known.has(initialSlug) ? initialSlug : projectsData.default;
+
+  state.currentSlug = slug;
+  setProjectUrl(slug, 'replace');
+  $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.slug === slug));
+
+  let detail: ProjectDetail | null = null;
+  if (speculativeDetail && slug === initialSlug) {
+    detail = await speculativeDetail;
+  }
+
+  if (detail) {
+    applyProjectDetail(detail);
+  } else {
+    await renderProject();
+  }
+
+  await authPromise;
+}
+
+void bootstrap();

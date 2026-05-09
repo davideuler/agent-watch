@@ -17,6 +17,10 @@ import { currentUser, endSession } from '../lib/auth';
 
 const api = new Hono<{ Bindings: Env }>();
 
+const PROJECT_CACHE_VERSION = 'v1';
+const PROJECT_CACHE_TTL = 60;
+const projectCacheKey = (slug: string) => `project:${PROJECT_CACHE_VERSION}:${slug}`;
+
 async function ensureProjects(env: Env): Promise<void> {
   const cfg = getProjects(env);
   for (const p of cfg) {
@@ -26,7 +30,6 @@ async function ensureProjects(env: Env): Promise<void> {
 }
 
 api.get('/projects', async (c) => {
-  await ensureProjects(c.env);
   const cfg = getProjects(c.env);
   const defaultSlug = getDefaultProjectSlug(c.env);
   const rows = await listProjects(c.env);
@@ -42,14 +45,36 @@ api.get('/projects', async (c) => {
 });
 
 api.get('/projects/:slug', async (c) => {
-  await ensureProjects(c.env);
   const slug = c.req.param('slug');
-  const project = await getProjectBySlug(c.env, slug);
-  if (!project) return c.json({ error: 'project not found' }, 404);
+  const cacheKey = projectCacheKey(slug);
 
-  const versions = await listVersions(c.env, project.id, 15);
-  const issues = await listIssuesForProject(c.env, project.id);
-  const ratings = await listRatingsForProject(c.env, project.id);
+  try {
+    const cached = await c.env.CACHE.get(cacheKey);
+    if (cached) {
+      c.header('content-type', 'application/json; charset=utf-8');
+      c.header('X-Cache', 'HIT');
+      return c.body(cached);
+    }
+  } catch (err) {
+    console.error('[cache] read failed', err);
+  }
+
+  let project = await getProjectBySlug(c.env, slug);
+  if (!project) {
+    // Lazy bootstrap: only run config sync when the slug is configured but the row is missing
+    const cfgEntry = getProjects(c.env).find((p) => p.slug === slug);
+    if (cfgEntry) {
+      await ensureProjects(c.env);
+      project = await getProjectBySlug(c.env, slug);
+    }
+    if (!project) return c.json({ error: 'project not found' }, 404);
+  }
+
+  const [versions, issues, ratings] = await Promise.all([
+    listVersions(c.env, project.id, 15),
+    listIssuesForProject(c.env, project.id),
+    listRatingsForProject(c.env, project.id),
+  ]);
 
   const ratingsByVersion = new Map<number, Array<UserRatingInput & { updated_at: string }>>();
   for (const r of ratings) {
@@ -108,7 +133,7 @@ api.get('/projects/:slug', async (c) => {
     };
   });
 
-  return c.json({
+  const payload = {
     project: {
       slug: project.slug,
       name: project.name,
@@ -116,7 +141,16 @@ api.get('/projects/:slug', async (c) => {
       github_url: project.github_url,
     },
     versions: versionsWithScore,
-  });
+  };
+  const body = JSON.stringify(payload);
+  c.executionCtx.waitUntil(
+    c.env.CACHE.put(cacheKey, body, { expirationTtl: PROJECT_CACHE_TTL }).catch((err) =>
+      console.error('[cache] write failed', err),
+    ),
+  );
+  c.header('content-type', 'application/json; charset=utf-8');
+  c.header('X-Cache', 'MISS');
+  return c.body(body);
 });
 
 api.get('/versions/:id/issues', async (c) => {
@@ -173,6 +207,20 @@ api.post('/ratings', async (c) => {
   const version = await getVersionById(c.env, versionId);
   if (!version) return c.json({ error: 'version not found' }, 404);
   await upsertRating(c.env, user.id, versionId, score, comment);
+
+  // Invalidate cached project payload so the new rating is visible immediately
+  c.executionCtx.waitUntil(
+    (async () => {
+      try {
+        const projects = await listProjects(c.env);
+        const project = projects.find((p) => p.id === version.project_id);
+        if (project) await c.env.CACHE.delete(projectCacheKey(project.slug));
+      } catch (err) {
+        console.error('[cache] invalidate failed', err);
+      }
+    })(),
+  );
+
   return c.json({ ok: true });
 });
 
