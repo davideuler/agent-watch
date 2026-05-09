@@ -14,30 +14,31 @@
   "assets": {
     "directory": "./dist/public",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "agent-watch",
-      "database_id": "REPLACE_WITH_REAL_D1_ID",
+      "database_id": "8d8d92c1-d6a7-4e8a-ba49-6c4fedb0ad3a",
       "migrations_dir": "migrations"
     }
   ],
   "kv_namespaces": [
     {
       "binding": "CACHE",
-      "id": "REPLACE_WITH_REAL_KV_ID"
+      "id": "bc200dcfa94340978a571fb238d77119"
     }
   ],
   "triggers": {
     "crons": ["*/20 * * * *"]
   },
   "vars": {
-    "PROJECTS": "openclaw=openclaw/openclaw,hermes=getzep/hermes",
+    "PROJECTS": "openclaw=openclaw/openclaw,hermes=nousresearch/hermes-agent",
     "DEFAULT_PROJECT": "openclaw",
     "LLM_BASE_URL": "https://api.openai.com/v1",
-    "LLM_MODEL_NAME": "gpt-4o-mini",
+    "LLM_MODEL_NAME": "gpt-5.4-mini",
     "PUBLIC_BASE_URL": "https://agentwatch.aicompass.dev"
   },
   "observability": {
