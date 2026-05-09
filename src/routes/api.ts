@@ -51,25 +51,47 @@ api.get('/projects/:slug', async (c) => {
   const issues = await listIssuesForProject(c.env, project.id);
   const ratings = await listRatingsForProject(c.env, project.id);
 
-  const ratingsByVersion = new Map<number, UserRatingInput[]>();
+  const ratingsByVersion = new Map<number, Array<UserRatingInput & { updated_at: string }>>();
   for (const r of ratings) {
     if (!ratingsByVersion.has(r.version_id)) ratingsByVersion.set(r.version_id, []);
-    ratingsByVersion.get(r.version_id)!.push({ score: r.score });
+    ratingsByVersion.get(r.version_id)!.push({ score: r.score, updated_at: r.updated_at });
   }
 
-  const versionsWithScore = versions.map((v) => {
-    const versionIssues: AnalyzedIssue[] = issues
-      .filter((i) => i.target_version === v.tag_name && i.sentiment)
-      .map((i) => ({
-        sentiment: (i.sentiment as 'positive' | 'negative' | 'neutral') ?? 'neutral',
-        confidence: i.confidence ?? 0,
-        comment_count: i.comment_count,
-        created_at: i.created_at,
-      }));
+  // Freeze scores for releases older than the top LIVE_VERSION_COUNT.
+  // Old releases recompute against the latest input-change time (max of
+  // version.published_at, related issue.updated_at, related rating.updated_at)
+  // instead of wall-clock now — so unchanged inputs produce a stable score.
+  const LIVE_VERSION_COUNT = 3;
+
+  const versionsWithScore = versions.map((v, idx) => {
+    const relatedIssues = issues.filter((i) => i.target_version === v.tag_name && i.sentiment);
+    const versionIssues: AnalyzedIssue[] = relatedIssues.map((i) => ({
+      sentiment: (i.sentiment as 'positive' | 'negative' | 'neutral') ?? 'neutral',
+      confidence: i.confidence ?? 0,
+      comment_count: i.comment_count,
+      created_at: i.created_at,
+    }));
+    const versionRatings = ratingsByVersion.get(v.id) ?? [];
+
+    let scoreNow: Date | undefined;
+    if (idx >= LIVE_VERSION_COUNT) {
+      let freezeMs = new Date(v.published_at).getTime();
+      for (const i of relatedIssues) {
+        const t = new Date(i.updated_at).getTime();
+        if (t > freezeMs) freezeMs = t;
+      }
+      for (const r of versionRatings) {
+        const t = new Date(r.updated_at).getTime();
+        if (t > freezeMs) freezeMs = t;
+      }
+      scoreNow = new Date(freezeMs);
+    }
+
     const stability = calculateStability(
       { publishedAt: v.published_at },
       versionIssues,
-      ratingsByVersion.get(v.id) ?? [],
+      versionRatings.map((r) => ({ score: r.score })),
+      scoreNow,
     );
     return {
       id: v.id,
