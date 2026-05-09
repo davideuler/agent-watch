@@ -39,6 +39,18 @@ export async function getVersionById(env: Env, id: number): Promise<VersionRow |
   );
 }
 
+export async function getVersionByTag(
+  env: Env,
+  projectId: number,
+  tagName: string,
+): Promise<VersionRow | null> {
+  return (
+    (await env.DB.prepare('SELECT * FROM versions WHERE project_id = ? AND tag_name = ? LIMIT 1')
+      .bind(projectId, tagName)
+      .first<VersionRow>()) ?? null
+  );
+}
+
 export interface UpsertVersionInput {
   project_id: number;
   tag_name: string;

@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
-import type { Env } from '../lib/types';
+import type { Env, VersionRow } from '../lib/types';
 import { getDefaultProjectSlug, getProjects } from '../lib/config';
 import {
   getProjectBySlug,
   getVersionById,
+  getVersionByTag,
   listIssuesForProject,
   listProjects,
   listRatingsForProject,
@@ -153,14 +154,19 @@ api.get('/projects/:slug', async (c) => {
   return c.body(body);
 });
 
-api.get('/versions/:id/issues', async (c) => {
-  const id = Number(c.req.param('id'));
-  if (!Number.isInteger(id)) return c.json({ error: 'invalid id' }, 400);
-  const version = await getVersionById(c.env, id);
-  if (!version) return c.json({ error: 'version not found' }, 404);
+const ISSUES_HARD_CAP = 200;
+
+function clampIssueLimit(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(ISSUES_HARD_CAP, Math.max(1, Math.floor(n)));
+}
+
+async function buildVersionIssuesPayload(c: any, version: VersionRow, limit: number) {
   const issues = await listIssuesForProject(c.env, version.project_id);
   const related = issues
     .filter((i) => i.target_version === version.tag_name)
+    .slice(0, limit)
     .map((i) => ({
       id: i.id,
       number: i.number,
@@ -174,8 +180,9 @@ api.get('/versions/:id/issues', async (c) => {
       confidence: i.confidence,
       summary: i.summary,
     }));
+  const totalRelated = issues.filter((i) => i.target_version === version.tag_name).length;
   const ratings = await listRatingsForVersion(c.env, version.id);
-  return c.json({
+  return {
     version: {
       id: version.id,
       tag_name: version.tag_name,
@@ -185,11 +192,40 @@ api.get('/versions/:id/issues', async (c) => {
       html_url: version.html_url,
     },
     issues: related,
+    issues_total: totalRelated,
     ratings: ratings.map((r) => ({
       score: r.score,
       comment: r.comment,
       created_at: r.created_at,
     })),
+  };
+}
+
+api.get('/versions/:id/issues', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.json({ error: 'invalid id' }, 400);
+  const version = await getVersionById(c.env, id);
+  if (!version) return c.json({ error: 'version not found' }, 404);
+  const limit = clampIssueLimit(c.req.query('limit'), ISSUES_HARD_CAP);
+  return c.json(await buildVersionIssuesPayload(c, version, limit));
+});
+
+api.get('/projects/:slug/versions/:tag/issues', async (c) => {
+  const slug = c.req.param('slug');
+  const tag = c.req.param('tag');
+  const project = await getProjectBySlug(c.env, slug);
+  if (!project) return c.json({ error: 'project not found' }, 404);
+  const version = await getVersionByTag(c.env, project.id, tag);
+  if (!version) return c.json({ error: 'version not found' }, 404);
+  const limit = clampIssueLimit(c.req.query('limit'), ISSUES_HARD_CAP);
+  const payload = await buildVersionIssuesPayload(c, version, limit);
+  return c.json({
+    ...payload,
+    project: {
+      slug: project.slug,
+      name: project.name,
+      github_url: project.github_url,
+    },
   });
 });
 

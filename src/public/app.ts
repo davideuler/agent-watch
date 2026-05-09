@@ -55,7 +55,9 @@ interface IssueItem {
 interface VersionIssuesResponse {
   version: { id: number; tag_name: string; name: string | null; published_at: string };
   issues: IssueItem[];
+  issues_total: number;
   ratings: Array<{ score: number; comment: string | null; created_at: string }>;
+  project?: { slug: string; name: string; github_url: string };
 }
 
 interface MeResponse {
@@ -66,9 +68,13 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = 
 const $$ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) =>
   Array.from(root.querySelectorAll(sel)) as T[];
 
+const ISSUES_PER_CARD = 20;
+const ISSUES_PAGE_CAP = 200;
+
 const state = {
   user: null as MeResponse['user'],
   currentSlug: '' as string,
+  projectsCache: null as { projects: ProjectListItem[]; default: string } | null,
 };
 
 const PROJECT_STORAGE_KEY = 'agent-watch-project';
@@ -81,6 +87,45 @@ function normalizePath(pathname: string): string {
 const currentPath = normalizePath(location.pathname);
 if (AUTH_START_PATHS.has(currentPath) && (location.search || location.hash)) {
   window.location.replace(`${location.origin}${currentPath}`);
+}
+
+type Route =
+  | { kind: 'home' }
+  | { kind: 'project'; slug: string }
+  | { kind: 'issues'; slug: string; tag: string };
+
+function parseRoute(pathname: string, search: string, hash: string): Route {
+  const path = normalizePath(pathname);
+  const issuesMatch = path.match(/^\/projects\/([^/]+)\/v\/(.+?)\/issues$/);
+  if (issuesMatch) {
+    return {
+      kind: 'issues',
+      slug: decodeURIComponent(issuesMatch[1]!),
+      tag: decodeURIComponent(issuesMatch[2]!),
+    };
+  }
+  const projectMatch = path.match(/^\/projects\/([^/]+)$/);
+  if (projectMatch) return { kind: 'project', slug: decodeURIComponent(projectMatch[1]!) };
+
+  // Legacy fallbacks: ?project=foo or #foo or sessionStorage
+  const params = new URLSearchParams(search);
+  const legacy = params.get('project')?.trim() || hash.replace('#', '').trim();
+  if (legacy) return { kind: 'project', slug: legacy };
+  try {
+    const stored = sessionStorage.getItem(PROJECT_STORAGE_KEY)?.trim();
+    if (stored) return { kind: 'project', slug: stored };
+  } catch {
+    // ignore
+  }
+  return { kind: 'home' };
+}
+
+function projectPath(slug: string): string {
+  return `/projects/${encodeURIComponent(slug)}`;
+}
+
+function issuesPath(slug: string, tag: string): string {
+  return `/projects/${encodeURIComponent(slug)}/v/${encodeURIComponent(tag)}/issues`;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -118,6 +163,10 @@ function capabilityRank(score: number): string {
   return 'Power drain';
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
 function renderProjectStats(data: ProjectDetail) {
   const stats = $('#project-stats');
   if (!stats) return;
@@ -132,10 +181,10 @@ function renderProjectStats(data: ProjectDetail) {
   const ratings = versions.reduce((sum, version) => sum + version.stability.breakdown.ratingCount, 0);
 
   const statItems: Array<[string, string]> = [
-    ['Average power', tracked ? avgScore.toFixed(1) : '--'],
-    ['Prime releases', `${stable}/${tracked}`],
+    ['Average score', tracked ? avgScore.toFixed(1) : '--'],
+    ['Stable releases', `${stable}/${tracked}`],
     ['Issue signals', String(issues)],
-    ['Field ratings', String(ratings)],
+    ['Community ratings', String(ratings)],
   ];
 
   stats.innerHTML = statItems
@@ -174,7 +223,7 @@ function renderAuth() {
       await fetch('/api/auth/logout', { method: 'POST' });
       state.user = null;
       renderAuth();
-      renderProject();
+      void rerenderActiveRoute();
     });
   } else {
     el.innerHTML = `
@@ -189,51 +238,56 @@ function renderAuth() {
   }
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-}
-
-function projectSlugFromUrl(): string {
-  const params = new URLSearchParams(location.search);
-  const explicit = params.get('project')?.trim() || location.hash.replace('#', '').trim();
-  if (explicit) return explicit;
-  try {
-    return sessionStorage.getItem(PROJECT_STORAGE_KEY)?.trim() ?? '';
-  } catch {
-    return '';
-  }
-}
-
-function setProjectUrl(slug: string, mode: 'push' | 'replace' = 'push'): void {
+function rememberSlug(slug: string): void {
   try {
     sessionStorage.setItem(PROJECT_STORAGE_KEY, slug);
   } catch {
-    // Ignore storage failures; the selected project still lives in memory.
+    // ignore storage failures
   }
+}
+
+function pushUrl(path: string, mode: 'push' | 'replace' = 'push'): void {
   const url = new URL(location.href);
-  url.pathname = '/';
+  url.pathname = path;
   url.search = '';
   url.hash = '';
   history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', url);
+}
+
+function setView(name: 'home' | 'issues'): void {
+  const home = $('#home-view')!;
+  const issues = $('#issues-view')!;
+  home.hidden = name !== 'home';
+  issues.hidden = name !== 'issues';
 }
 
 function renderProjectsList(projects: ProjectListItem[]): void {
   const tabsEl = $('#project-tabs')!;
   tabsEl.innerHTML = '';
   for (const p of projects) {
-    const btn = document.createElement('button');
-    btn.className = 'tab-btn';
-    btn.textContent = p.name;
-    btn.dataset.slug = p.slug;
-    btn.addEventListener('click', () => switchProject(p.slug));
-    tabsEl.appendChild(btn);
+    const a = document.createElement('a');
+    a.className = 'tab-btn';
+    a.textContent = p.name;
+    a.dataset.slug = p.slug;
+    a.href = projectPath(p.slug);
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      void switchProject(p.slug);
+    });
+    tabsEl.appendChild(a);
   }
+}
+
+function highlightTab(slug: string | null): void {
+  $$('.tab-btn').forEach((b) => b.classList.toggle('active', !!slug && b.dataset.slug === slug));
 }
 
 async function switchProject(slug: string, urlMode: 'push' | 'replace' = 'push') {
   state.currentSlug = slug;
-  setProjectUrl(slug, urlMode);
-  $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.slug === slug));
+  rememberSlug(slug);
+  pushUrl(projectPath(slug), urlMode);
+  highlightTab(slug);
+  setView('home');
   await renderProject();
 }
 
@@ -254,26 +308,25 @@ async function renderProject() {
 
 function applyProjectDetail(data: ProjectDetail): void {
   const versionsEl = $('#versions')!;
-  $('#project-title')!.textContent = `${data.project.name} release powers`;
+  $('#project-title')!.textContent = `${data.project.name} releases`;
   const meta = $('#project-meta')!;
-  meta.innerHTML = `<a href="${data.project.github_url}" target="_blank" rel="noreferrer">${escapeHtml(data.project.github_repo)}</a> · ${data.versions.length} versions mapped`;
+  meta.innerHTML = `Tracking <a href="${data.project.github_url}" target="_blank" rel="noreferrer">${escapeHtml(data.project.github_repo)}</a> · ${data.versions.length} version${data.versions.length === 1 ? '' : 's'} mapped`;
   renderProjectStats(data);
 
   if (data.versions.length === 0) {
-    versionsEl.innerHTML = '<div class="empty">No versions yet. The hourly cron will populate them, or trigger <code>POST /cron/run</code>.</div>';
+    versionsEl.innerHTML = '<div class="empty">No versions yet. The cron will populate them shortly.</div>';
     return;
   }
 
   versionsEl.innerHTML = '';
-  for (const v of data.versions) versionsEl.appendChild(renderVersionCard(v));
+  for (const v of data.versions) versionsEl.appendChild(renderVersionCard(v, data.project.slug));
 }
 
-function renderVersionCard(v: VersionItem): HTMLElement {
+function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
   const tpl = $<HTMLTemplateElement>('#version-card-template')!;
   const node = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
 
-  const tagEl = $('.vc-tag', node)!;
-  tagEl.textContent = v.tag_name;
+  $('.vc-tag', node)!.textContent = v.tag_name;
   $('.vc-name', node)!.textContent = v.name && v.name !== v.tag_name ? v.name : '';
 
   const scoreEl = $<HTMLElement>('.vc-score', node)!;
@@ -303,7 +356,7 @@ function renderVersionCard(v: VersionItem): HTMLElement {
   const dl = $<HTMLAnchorElement>('.vc-download', node)!;
   if (v.download_url) {
     dl.href = v.download_url;
-    dl.textContent = 'Deploy power';
+    dl.textContent = 'Download';
   } else {
     dl.href = v.html_url ?? '#';
     dl.textContent = 'View release';
@@ -311,30 +364,22 @@ function renderVersionCard(v: VersionItem): HTMLElement {
   const rl = $<HTMLAnchorElement>('.vc-release-link', node)!;
   rl.href = v.html_url ?? '#';
 
-  const detail = $<HTMLElement>('.vc-detail', node)!;
-  const toggle = $<HTMLButtonElement>('.vc-toggle', node)!;
-  detail.hidden = false;
-  toggle.textContent = 'Hide intel';
-  let loaded = true;
-  void loadDetail(v, node);
-  toggle.addEventListener('click', async () => {
-    detail.hidden = !detail.hidden;
-    toggle.textContent = detail.hidden ? 'Open intel' : 'Hide intel';
-    if (!loaded && !detail.hidden) {
-      loaded = true;
-      await loadDetail(v, node);
-    }
-  });
+  void loadDetail(v, slug, node);
 
   return node;
 }
 
-async function loadDetail(v: VersionItem, root: HTMLElement) {
+async function loadDetail(v: VersionItem, slug: string, root: HTMLElement) {
   const issuesEl = $('.vc-issues-list', root)!;
+  const allLink = $<HTMLAnchorElement>('.vc-issues-all', root)!;
   issuesEl.innerHTML = '<li>Loading…</li>';
+  allLink.hidden = true;
+
   let data: VersionIssuesResponse;
   try {
-    data = await api<VersionIssuesResponse>(`/api/versions/${v.id}/issues`);
+    data = await api<VersionIssuesResponse>(
+      `/api/versions/${v.id}/issues?limit=${ISSUES_PER_CARD}`,
+    );
   } catch (err) {
     issuesEl.innerHTML = `<li>Failed: ${(err as Error).message}</li>`;
     return;
@@ -343,16 +388,22 @@ async function loadDetail(v: VersionItem, root: HTMLElement) {
     issuesEl.innerHTML = '<li class="muted">No issues linked to this version yet.</li>';
   } else {
     issuesEl.innerHTML = '';
-    for (const i of data.issues.slice(0, 50)) {
-      const li = document.createElement('li');
-      li.classList.add(`sentiment-${i.sentiment ?? 'unknown'}`);
-      const sentimentIcon = i.sentiment === 'negative' ? '⚠' : i.sentiment === 'positive' ? '✓' : '·';
-      li.innerHTML = `
-        <span class="issue-num">#${i.number}</span>
-        <span class="issue-title"><a href="${i.html_url}" target="_blank" rel="noreferrer">${escapeHtml(i.title)}</a></span>
-        <span class="issue-state" title="${escapeHtml(i.summary ?? '')}">${sentimentIcon} ${i.state}</span>`;
-      issuesEl.appendChild(li);
+    for (const i of data.issues) {
+      issuesEl.appendChild(renderIssueLi(i, 'compact'));
     }
+  }
+
+  const total = data.issues_total ?? data.issues.length;
+  if (total > 0) {
+    const targetTotal = Math.min(total, ISSUES_PAGE_CAP);
+    allLink.hidden = false;
+    allLink.href = issuesPath(slug, v.tag_name);
+    allLink.textContent =
+      total > ISSUES_PER_CARD ? `View all ${targetTotal} →` : `View page →`;
+    allLink.onclick = (e) => {
+      e.preventDefault();
+      void navigateToIssues(slug, v.tag_name);
+    };
   }
 
   const summary = $('.rating-summary', root)!;
@@ -373,6 +424,36 @@ async function loadDetail(v: VersionItem, root: HTMLElement) {
     form.hidden = true;
     loginNote.hidden = false;
   }
+}
+
+function renderIssueLi(i: IssueItem, mode: 'compact' | 'full'): HTMLElement {
+  const li = document.createElement('li');
+  li.classList.add(`sentiment-${i.sentiment ?? 'unknown'}`);
+  const sentimentIcon = i.sentiment === 'negative' ? '⚠' : i.sentiment === 'positive' ? '✓' : '·';
+  if (mode === 'full') {
+    const summary = i.summary ? `<div class="issue-summary muted">${escapeHtml(i.summary)}</div>` : '';
+    const meta = [
+      `${i.comment_count} comment${i.comment_count === 1 ? '' : 's'}`,
+      i.user_login ? `by ${escapeHtml(i.user_login)}` : null,
+      `${timeAgo(i.created_at)}`,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    li.innerHTML = `
+      <div class="issue-row-top">
+        <span class="issue-num">#${i.number}</span>
+        <span class="issue-title"><a href="${i.html_url}" target="_blank" rel="noreferrer">${escapeHtml(i.title)}</a></span>
+        <span class="issue-state">${sentimentIcon} ${escapeHtml(i.state)}</span>
+      </div>
+      <div class="issue-row-meta muted">${meta}</div>
+      ${summary}`;
+  } else {
+    li.innerHTML = `
+      <span class="issue-num">#${i.number}</span>
+      <span class="issue-title"><a href="${i.html_url}" target="_blank" rel="noreferrer">${escapeHtml(i.title)}</a></span>
+      <span class="issue-state" title="${escapeHtml(i.summary ?? '')}">${sentimentIcon} ${escapeHtml(i.state)}</span>`;
+  }
+  return li;
 }
 
 function setupRatingForm(versionId: number, root: HTMLElement) {
@@ -424,22 +505,137 @@ function paintStars(root: HTMLElement, count: number, cls: 'hover' | 'active') {
   for (let i = 0; i < count && i < stars.length; i++) stars[i]!.classList.add(cls);
 }
 
+async function navigateToIssues(slug: string, tag: string, urlMode: 'push' | 'replace' = 'push') {
+  pushUrl(issuesPath(slug, tag), urlMode);
+  await renderIssuesPage(slug, tag);
+}
+
+async function renderIssuesPage(slug: string, tag: string): Promise<void> {
+  setView('issues');
+  highlightTab(slug);
+  const list = $('#issues-page-list')!;
+  const titleEl = $('#issues-title')!;
+  const metaEl = $('#issues-meta')!;
+  const eyebrowEl = $('#issues-eyebrow')!;
+  const countLabel = $('#issues-count-label')!;
+  const capNote = $('#issues-cap-note')!;
+  const back = $<HTMLAnchorElement>('#issues-back')!;
+
+  titleEl.textContent = `Loading ${tag}…`;
+  metaEl.textContent = '';
+  list.innerHTML = '<li class="muted">Loading issues…</li>';
+  countLabel.textContent = 'Related issues';
+  capNote.textContent = '';
+  back.href = projectPath(slug);
+  back.onclick = (e) => {
+    e.preventDefault();
+    void switchProject(slug);
+  };
+
+  let data: VersionIssuesResponse;
+  try {
+    data = await api<VersionIssuesResponse>(
+      `/api/projects/${encodeURIComponent(slug)}/versions/${encodeURIComponent(tag)}/issues?limit=${ISSUES_PAGE_CAP}`,
+    );
+  } catch (err) {
+    titleEl.textContent = 'Could not load issues';
+    list.innerHTML = `<li class="empty">Failed: ${escapeHtml((err as Error).message)}</li>`;
+    return;
+  }
+
+  const projectName = data.project?.name ?? slug;
+  eyebrowEl.textContent = `// ${projectName} · ${data.version.tag_name}`;
+  titleEl.textContent = `${data.version.tag_name} — related issues`;
+  const subParts: string[] = [];
+  if (data.version.name && data.version.name !== data.version.tag_name) subParts.push(data.version.name);
+  subParts.push(`Released ${formatDate(data.version.published_at)} · ${timeAgo(data.version.published_at)}`);
+  metaEl.textContent = subParts.join(' · ');
+
+  const total = data.issues_total ?? data.issues.length;
+  countLabel.textContent = `${data.issues.length} issue${data.issues.length === 1 ? '' : 's'}`;
+  if (total > data.issues.length) {
+    capNote.textContent = `Showing the first ${data.issues.length} of ${total} matched issues (capped at ${ISSUES_PAGE_CAP}).`;
+  } else if (total === 0) {
+    capNote.textContent = 'No issues are linked to this release yet.';
+  } else {
+    capNote.textContent = `All ${total} matched issue${total === 1 ? '' : 's'}.`;
+  }
+
+  if (data.issues.length === 0) {
+    list.innerHTML = '<li class="empty">No issues linked to this release yet.</li>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const i of data.issues) list.appendChild(renderIssueLi(i, 'full'));
+}
+
+async function rerenderActiveRoute(): Promise<void> {
+  const route = parseRoute(location.pathname, location.search, location.hash);
+  if (route.kind === 'issues') {
+    await renderIssuesPage(route.slug, route.tag);
+  } else if (route.kind === 'project') {
+    state.currentSlug = route.slug;
+    setView('home');
+    highlightTab(route.slug);
+    await renderProject();
+  }
+}
+
 window.addEventListener('popstate', () => {
-  const slug = projectSlugFromUrl();
-  if (slug && slug !== state.currentSlug) switchProject(slug, 'replace');
+  void handleRoute('replace');
 });
 
+async function handleRoute(_urlMode: 'push' | 'replace'): Promise<void> {
+  const route = parseRoute(location.pathname, location.search, location.hash);
+  const projects = state.projectsCache;
+  if (!projects) return;
+  const known = new Set(projects.projects.map((p) => p.slug));
+
+  if (route.kind === 'issues') {
+    const slug = known.has(route.slug) ? route.slug : projects.default;
+    state.currentSlug = slug;
+    rememberSlug(slug);
+    if (slug !== route.slug) {
+      pushUrl(projectPath(slug), 'replace');
+      setView('home');
+      highlightTab(slug);
+      await renderProject();
+      return;
+    }
+    await renderIssuesPage(slug, route.tag);
+    return;
+  }
+
+  const desiredSlug =
+    route.kind === 'project' && known.has(route.slug)
+      ? route.slug
+      : route.kind === 'project'
+        ? projects.default
+        : projects.default;
+
+  state.currentSlug = desiredSlug;
+  rememberSlug(desiredSlug);
+  if (route.kind !== 'project' || route.slug !== desiredSlug) {
+    pushUrl(projectPath(desiredSlug), 'replace');
+  }
+  setView('home');
+  highlightTab(desiredSlug);
+  await renderProject();
+}
+
 async function bootstrap(): Promise<void> {
-  const initialSlug = projectSlugFromUrl();
+  const initialRoute = parseRoute(location.pathname, location.search, location.hash);
+  const initialSlug =
+    initialRoute.kind === 'project' || initialRoute.kind === 'issues' ? initialRoute.slug : '';
 
   // Auth + projects list run independently — fire in parallel.
-  // If the URL hints at a slug, also fire the detail call speculatively;
-  // it's cheap to throw away if the slug is invalid and saves an RTT when valid.
   const authPromise = loadAuth();
   const projectsPromise = api<{ projects: ProjectListItem[]; default: string }>('/api/projects');
-  const speculativeDetail = initialSlug
-    ? api<ProjectDetail>(`/api/projects/${encodeURIComponent(initialSlug)}`).catch(() => null)
-    : null;
+  // For project landing, fire detail speculatively; cheap to discard if slug invalid.
+  const speculativeDetail =
+    initialRoute.kind === 'project' && initialSlug
+      ? api<ProjectDetail>(`/api/projects/${encodeURIComponent(initialSlug)}`).catch(() => null)
+      : null;
 
   let projectsData: { projects: ProjectListItem[]; default: string };
   try {
@@ -449,15 +645,36 @@ async function bootstrap(): Promise<void> {
     await authPromise;
     return;
   }
+  state.projectsCache = projectsData;
 
   renderProjectsList(projectsData.projects);
 
   const known = new Set(projectsData.projects.map((p) => p.slug));
-  const slug = known.has(initialSlug) ? initialSlug : projectsData.default;
 
+  if (initialRoute.kind === 'issues') {
+    const slug = known.has(initialRoute.slug) ? initialRoute.slug : projectsData.default;
+    state.currentSlug = slug;
+    rememberSlug(slug);
+    if (slug !== initialRoute.slug) {
+      pushUrl(projectPath(slug), 'replace');
+      setView('home');
+      highlightTab(slug);
+      await renderProject();
+    } else {
+      pushUrl(issuesPath(slug, initialRoute.tag), 'replace');
+      highlightTab(slug);
+      await renderIssuesPage(slug, initialRoute.tag);
+    }
+    await authPromise;
+    return;
+  }
+
+  const slug = known.has(initialSlug) ? initialSlug : projectsData.default;
   state.currentSlug = slug;
-  setProjectUrl(slug, 'replace');
-  $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.slug === slug));
+  rememberSlug(slug);
+  pushUrl(projectPath(slug), 'replace');
+  setView('home');
+  highlightTab(slug);
 
   let detail: ProjectDetail | null = null;
   if (speculativeDetail && slug === initialSlug) {
