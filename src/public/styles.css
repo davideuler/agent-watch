@@ -454,6 +454,7 @@ a:hover {
   letter-spacing: 0.04em;
   color: var(--text-dim);
 }
+.legend::-webkit-details-marker { display: none; }
 .legend-item { display: flex; align-items: center; gap: 0.45rem; }
 .legend-item .legend-range { color: var(--text-mute); }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -476,6 +477,42 @@ a:hover {
 @keyframes signalPing {
   0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 55%, transparent); }
   100% { box-shadow: 0 0 0 8px transparent; }
+}
+
+.score-legend {
+  margin: 0.7rem 0 0.8rem;
+}
+.score-legend-summary {
+  margin: 0;
+  cursor: pointer;
+  list-style: none;
+}
+.score-legend-summary:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-elev));
+}
+.score-legend-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--accent);
+  font-weight: 700;
+  margin-left: 0.2rem;
+  white-space: nowrap;
+}
+.score-legend-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  font-size: 0.64rem;
+  line-height: 1;
+}
+.score-legend[open] .score-legend-summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 /* ── VERSIONS GRID ── */
@@ -948,6 +985,14 @@ a:hover {
 }
 .scoring-info > summary::-webkit-details-marker { display: none; }
 .scoring-info > summary:hover { background: var(--bg-soft); color: var(--accent); }
+.scoring-info > .score-legend-summary {
+  padding: 0.45rem 0.65rem;
+  justify-content: flex-start;
+}
+.scoring-info > .score-legend-summary:hover {
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-elev));
+  color: var(--text-dim);
+}
 .scoring-info-q { flex: 1; }
 .scoring-info-hint {
   font-size: 0.85rem;
@@ -956,6 +1001,14 @@ a:hover {
 }
 .scoring-info[open] > summary .scoring-info-hint { transform: rotate(180deg); }
 .scoring-info[open] > summary { border-bottom: 1px dashed var(--border); color: var(--accent); }
+.scoring-info[open] > .score-legend-summary {
+  border-bottom-color: var(--border-strong);
+  color: var(--text-dim);
+}
+.score-legend-summary:hover .score-legend-expand,
+.scoring-info[open] > .score-legend-summary .score-legend-expand {
+  color: var(--accent);
+}
 .scoring-info-body {
   padding: 0.75rem 0.8rem 0.9rem;
   display: flex;

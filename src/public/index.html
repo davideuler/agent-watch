@@ -46,20 +46,23 @@
     <main class="main">
       <!-- HOME / PROJECT VIEW -->
       <div id="home-view">
-        <section class="hero">
-          <span class="hero-eyebrow">// release stability dashboard</span>
-          <h1 class="hero-title">Pick the right release — with evidence.</h1>
-          <p class="hero-lede">
-            Agent Watch tracks every <strong>OpenClaw</strong> and <strong>Hermes Agent</strong> release and
-            scores it <strong>0–10</strong> for stability — built from real GitHub issues, LLM sentiment
-            classification, and community ratings. Use the score to choose the safest version to deploy.
-          </p>
+        <section class="overview" id="overview">
+          <span class="overview-eyebrow">project</span>
+          <h2 id="project-title">Loading…</h2>
+          <p id="project-meta" class="muted"></p>
+          <div class="stat-rail" id="project-stats" aria-live="polite"></div>
         </section>
 
-        <details class="scoring-info">
-          <summary>
-            <span class="scoring-info-q">How is the score computed? What do the levels mean?</span>
-            <span class="scoring-info-hint" aria-hidden="true">▾</span>
+        <details class="scoring-info score-legend">
+          <summary class="legend score-legend-summary">
+            <span class="legend-item"><span class="dot dot-critical"></span><span>POWER DRAIN</span><span class="legend-range">&lt; 4</span></span>
+            <span class="legend-item"><span class="dot dot-volatile"></span><span>VOLATILE</span><span class="legend-range">4–5.4</span></span>
+            <span class="legend-item"><span class="dot dot-neutral"></span><span>FIELD-READY</span><span class="legend-range">5.5–6.9</span></span>
+            <span class="legend-item"><span class="dot dot-apex"></span><span>APEX</span><span class="legend-range">7–8.5</span></span>
+            <span class="legend-item"><span class="dot dot-prime"></span><span>OMEGA</span><span class="legend-range">8.6–10</span></span>
+            <span class="legend-spacer"></span>
+            <span class="legend-pulse"><span class="legend-pulse-dot"></span><span>LIVE · cron every 20 min</span></span>
+            <span class="score-legend-expand"><span class="score-legend-icon" aria-hidden="true">?</span><span>Details</span><span class="scoring-info-hint" aria-hidden="true">▾</span></span>
           </summary>
           <div class="scoring-info-body">
             <ul class="scoring-tiers">
@@ -71,29 +74,13 @@
               <li><span class="tier-pill tier-grey">5.0</span> <strong>FLUX FIELD</strong> — neutral hold · brand-new release, signal still accumulating (first 3 hours)</li>
             </ul>
             <div class="scoring-formula">
+              <p><strong>Agent Watch</strong> tracks every <strong>OpenClaw</strong> and <strong>Hermes Agent</strong> release and scores it <strong>0–10</strong> for stability — built from real GitHub issues, LLM sentiment classification, and community ratings. Use the score to choose the safest version to deploy.</p>
               <p><strong>Inputs.</strong> Each release pulls in its referenced GitHub issues. An LLM classifies every issue as <em>positive</em> / <em>negative</em> / <em>neutral</em> with a confidence score. Each negative signal is weighted by recency, comment activity, and confidence. User ratings (1–10) blend in once submitted.</p>
               <p><strong>Formula.</strong> <code>score = 10 · exp(−5 · bug_rate)</code> &nbsp;where&nbsp; <code>bug_rate = effective_negative_weight / max(24h, age_in_hours)</code>. Brand-new releases sit at neutral 5 for the first 3 hours while signal accumulates. Once the next 3 versions ship, the score is <strong>frozen</strong> against the latest input change so unchanged data doesn't drift.</p>
               <p class="scoring-formula-foot">Updated every 20 minutes via cron — pulled from public GitHub data + LLM classification.</p>
             </div>
           </div>
         </details>
-
-        <section class="overview" id="overview">
-          <span class="overview-eyebrow">project</span>
-          <h2 id="project-title">Loading…</h2>
-          <p id="project-meta" class="muted"></p>
-          <div class="stat-rail" id="project-stats" aria-live="polite"></div>
-        </section>
-
-        <section class="legend">
-          <span class="legend-item"><span class="dot dot-critical"></span><span>POWER DRAIN</span><span class="legend-range">&lt; 4</span></span>
-          <span class="legend-item"><span class="dot dot-volatile"></span><span>VOLATILE</span><span class="legend-range">4–5.4</span></span>
-          <span class="legend-item"><span class="dot dot-neutral"></span><span>FIELD-READY</span><span class="legend-range">5.5–6.9</span></span>
-          <span class="legend-item"><span class="dot dot-apex"></span><span>APEX</span><span class="legend-range">7–8.5</span></span>
-          <span class="legend-item"><span class="dot dot-prime"></span><span>OMEGA</span><span class="legend-range">8.6–10</span></span>
-          <span class="legend-spacer"></span>
-          <span class="legend-pulse"><span class="legend-pulse-dot"></span><span>LIVE · cron every 20 min</span></span>
-        </section>
 
         <section class="versions" id="versions">
           <div class="loading">syncing capability matrix</div>
