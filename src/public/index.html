@@ -8,11 +8,10 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%97%89%3C/text%3E%3C/svg%3E" />
     <script>
       (function() {
+        var valid = ['light','dark','ocean','terminal','rose'];
         try {
           var stored = localStorage.getItem('agent-watch-theme');
-          var theme = stored === 'dark' || stored === 'light'
-            ? stored
-            : 'light';
+          var theme = valid.indexOf(stored) !== -1 ? stored : 'light';
           document.documentElement.setAttribute('data-theme', theme);
         } catch (e) {
           document.documentElement.setAttribute('data-theme', 'light');
@@ -32,10 +31,13 @@
         <span class="brand-tag">// release superpower console</span>
       </div>
       <nav class="project-tabs" id="project-tabs"></nav>
-      <button class="theme-toggle" id="theme-toggle" type="button" title="Toggle light/dark" aria-label="Toggle light/dark theme">
-        <span class="theme-icon-light" aria-hidden="true">☀</span>
-        <span class="theme-icon-dark" aria-hidden="true">☾</span>
-      </button>
+      <div class="theme-picker" id="theme-picker" role="group" aria-label="Choose theme">
+        <button class="theme-swatch" data-theme-value="light"    title="Light"></button>
+        <button class="theme-swatch" data-theme-value="dark"     title="Dark"></button>
+        <button class="theme-swatch" data-theme-value="ocean"    title="Ocean"></button>
+        <button class="theme-swatch" data-theme-value="terminal" title="Terminal"></button>
+        <button class="theme-swatch" data-theme-value="rose"     title="Rose"></button>
+      </div>
       <div class="auth-area" id="auth-area">
         <span class="auth-loading muted">··· auth</span>
       </div>
@@ -113,13 +115,24 @@
 
     <script>
       (function () {
-        var btn = document.getElementById('theme-toggle');
-        if (!btn) return;
-        btn.addEventListener('click', function () {
-          var cur = document.documentElement.getAttribute('data-theme') || 'light';
-          var next = cur === 'dark' ? 'light' : 'dark';
-          document.documentElement.setAttribute('data-theme', next);
-          try { localStorage.setItem('agent-watch-theme', next); } catch (e) {}
+        function setTheme(name) {
+          document.documentElement.setAttribute('data-theme', name);
+          try { localStorage.setItem('agent-watch-theme', name); } catch (e) {}
+          document.querySelectorAll('.theme-swatch').forEach(function(s) {
+            s.classList.toggle('active', s.getAttribute('data-theme-value') === name);
+          });
+        }
+        var picker = document.getElementById('theme-picker');
+        if (!picker) return;
+        picker.addEventListener('click', function(e) {
+          var btn = e.target.closest('.theme-swatch');
+          if (!btn) return;
+          setTheme(btn.getAttribute('data-theme-value'));
+        });
+        // mark active swatch on load
+        var cur = document.documentElement.getAttribute('data-theme') || 'light';
+        document.querySelectorAll('.theme-swatch').forEach(function(s) {
+          s.classList.toggle('active', s.getAttribute('data-theme-value') === cur);
         });
       })();
     </script>
