@@ -1,16 +1,153 @@
-Agent Watch 产品需求
+# Agent Watch
 
-背景：OpenClaw 版本发布频繁，经常有用户抱怨 openclaw 新发布的版本不稳定，新版本常常出现大的问题.
-同样的问题也可能出现hermes 这个开源项目上. 
+Track release stability for [OpenClaw](https://github.com/openclaw/openclaw), [Hermes](https://github.com/getzep/hermes), and any other open-source project. Built on Cloudflare Workers + D1.
 
-因此，实现对这两个项目的 github issue 的用户反馈问题的监控，监控这两个产品各个版本的稳定性。
-1.通过分析两个历史版本之间发布的时间段之间，  用户新反馈的问题来识别版本的稳定性。版本的稳定性从0到10分，5是中立，10是非常稳定，1是非常不稳定。
-2.调用 Claude/OpenAI 模型来评估每一个 Github Issue 是正向的，还是负向的， Github Issue 的发布时间，以及推测的 issue 可能指向的版本，指向版本的准确度。拉取 issue 的时候，issue 的最近10条评论也需要拉取。 Claude/OpenAI 的  BASE_URL, MODLE_NAME, API_KEY 都要可以配置。
-3.监控历史上的15个版本的稳定性。
-4.一个新版本发布之后，这个新版本的稳定性状态标记为5分，标记成灰色（初始状态）。 随著时间的推移，用户反馈越来越多之后，提高这个分数或者减少这个分数。用户没有负相反馈就增加分数。用户有负相反馈就减少分数。小于5分时标记为红色，分数越低颜色越红，10分标记为绿色，分数越高颜色越绿。 分数的计算考虑 issue 的负向反馈数量，以及时间因素，以及用户的评论数。
-5.每一个版本下面显示版本的下载链接，以及相关的用户反馈的跟这个版本相关的问题。
-6.要监控的项目的github地址，可以在 .env 文件中配置。agentwatch 上面首页显示 openclaw 的稳定性。可以切换显示其他项目例如 hermes 的稳定性。
-7.agentwatch 的网站上，用户可以使用 github/google 登陆，可以给每一个发布的 openclaw/hermes 版本打星评分，评分的时候也是按照 1-10分来评分， 评分的时候也可以输入评论（非必选）。版本稳定性综合 Github issue 的问题反馈，以及用户评论的星级来计算。新版本发布3小时内，显示灰色的5分（提示分析中）
-8.Github issue 调用的时候，如果环境变量中配置有 GITHUB_TOKEN，则使用 GITHUB_TOKEN 来调用 github api.
-9.项目发布到 cloudflare 上，绑定到域名 agentwatch.aicompass.dev 上。
+**Live:** https://agentwatch.aicompass.dev
 
+---
+
+## How it works
+
+1. **Hourly cron** pulls the 15 most-recent releases from GitHub for each configured project, plus issues updated since the last poll.
+2. **LLM (OpenAI-compatible)** classifies each issue's sentiment (`positive` / `negative` / `neutral`), guesses which version tag the report targets, and gives a confidence score.
+3. **Stability score (0–10)** per version blends:
+   - Base 5
+   - LLM-classified issues (negative → subtract, positive → add) weighted by confidence × comment-volume × recency-decay
+   - User star ratings (1–10) — community ratings are blended with up to 60% weight at saturation
+4. **New versions** (< 3 hours old) display a grey **5** with `analyzing…`.
+5. **Color coding** is interpolated:
+   - `< 5` shades of red, deeper for lower scores
+   - `= 5` grey
+   - `> 5` shades of green, deeper for higher scores
+6. **Login** with GitHub or Google to add your own 1–10 rating with optional comment.
+
+---
+
+## Local development
+
+```bash
+npm install
+cp .env.example .dev.vars            # populate at minimum LLM_API_KEY and GITHUB_TOKEN
+
+# Validate everything once before deploy
+npm run test                         # typecheck + sql validation + score smoke tests
+
+# Run the worker locally
+npm run db:migrate:local
+npm run dev
+```
+
+`npm run dev` serves on `http://localhost:8787` with the static frontend mounted under `/`.
+
+To trigger a one-off poll locally:
+
+```bash
+curl -X POST http://localhost:8787/cron/run -H "x-admin-token: $SESSION_SECRET"
+```
+
+---
+
+## Configuration
+
+All config is via environment variables — see `.env.example` for the full list.
+
+| Variable | Purpose | Example |
+| --- | --- | --- |
+| `PROJECTS` | Comma-separated `slug=owner/repo` for projects to monitor | `openclaw=openclaw/openclaw,hermes=getzep/hermes` |
+| `DEFAULT_PROJECT` | Slug shown on the homepage by default | `openclaw` |
+| `PUBLIC_BASE_URL` | Origin used for OAuth `redirect_uri` | `https://agentwatch.aicompass.dev` |
+| `GITHUB_TOKEN` | Bumps GitHub API rate-limit from 60 → 5000/hour | `ghp_…` |
+| `LLM_BASE_URL` | OpenAI-compatible endpoint (works for OpenAI, Anthropic via proxy, third-party) | `https://api.openai.com/v1` |
+| `LLM_MODEL_NAME` | Model used for issue analysis | `gpt-4o-mini` |
+| `LLM_API_KEY` | API key for the LLM provider | `sk-…` |
+| `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | GitHub login app credentials | — |
+| `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Google login app credentials | — |
+| `SESSION_SECRET` | Random ≥32-char string; also gates `/cron/run` admin endpoint | — |
+
+### OAuth callback URLs
+
+When registering OAuth apps:
+
+- **GitHub** → `https://agentwatch.aicompass.dev/auth/github/callback`
+- **Google** → `https://agentwatch.aicompass.dev/auth/google/callback`
+
+### LLM provider tips
+
+`LLM_BASE_URL` accepts any OpenAI-Chat-Completions-compatible endpoint. Tested with:
+- OpenAI (`https://api.openai.com/v1`)
+- Anthropic via proxy (e.g. `https://api.anthropic.com/v1` with a compat shim)
+- Self-hosted (`https://your-host/v1`)
+
+If `LLM_API_KEY` is unset the worker still polls and stores issues, but every analysis defaults to `neutral / confidence 0` so versions show 5 / grey.
+
+---
+
+## Deploying to Cloudflare
+
+```bash
+# 1. Create the D1 database (capture the printed ID)
+npx wrangler d1 create agent-watch
+# → paste database_id into wrangler.jsonc
+
+# 2. Create the KV namespace
+npx wrangler kv namespace create CACHE
+# → paste id into wrangler.jsonc
+
+# 3. Apply migrations
+npm run db:migrate         # remote
+npm run db:migrate:local   # local emulator
+
+# 4. Set secrets (NEVER commit these)
+npx wrangler secret put GITHUB_TOKEN
+npx wrangler secret put LLM_API_KEY
+npx wrangler secret put GITHUB_OAUTH_CLIENT_ID
+npx wrangler secret put GITHUB_OAUTH_CLIENT_SECRET
+npx wrangler secret put GOOGLE_OAUTH_CLIENT_ID
+npx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
+npx wrangler secret put SESSION_SECRET
+
+# 5. Build & deploy
+npm run deploy
+```
+
+### Custom domain `agentwatch.aicompass.dev`
+
+`wrangler.jsonc` already declares a custom-domain route. Make sure:
+
+1. The `aicompass.dev` zone exists in your Cloudflare account.
+2. After the first `wrangler deploy`, attach the route in **Workers → agent-watch → Settings → Domains & Routes** (or wrangler will provision the certificate automatically when the route block above is present).
+3. Update `PUBLIC_BASE_URL` to match — and update the OAuth app callback URLs.
+
+---
+
+## Architecture
+
+```
+┌──────────────┐     hourly cron     ┌──────────────────────┐
+│   GitHub     │ ◀────────────────── │  Workers scheduled() │
+│   REST API   │                     │     (poll.ts)        │
+└──────────────┘                     └─────────┬────────────┘
+                                               │
+                                               ▼
+┌──────────────┐                     ┌──────────────────────┐
+│  LLM (any    │ ◀─────────────────  │   analyzeIssue()     │
+│  OAI-compat) │                     │   sentiment + tag    │
+└──────────────┘                     └─────────┬────────────┘
+                                               │
+                                               ▼
+                                     ┌──────────────────────┐
+                                     │   D1 (sqlite)        │
+                                     │   versions / issues  │
+                                     │   analyses / ratings │
+                                     └─────────┬────────────┘
+                                               │ HTTP API
+                                               ▼
+                                     ┌──────────────────────┐
+                                     │ static SPA dashboard │
+                                     │ (Cloudflare Assets)  │
+                                     └──────────────────────┘
+```
+
+## License
+
+MIT

@@ -1,0 +1,197 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1778280453522,
+  "projectRoot": "/Users/david/daily-news/agent-watch",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {},
+  "hotPaths": [
+    {
+      "path": "src/routes/api.ts",
+      "accessCount": 8,
+      "lastAccessed": 1778281419618,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/poll.ts",
+      "accessCount": 6,
+      "lastAccessed": 1778285967039,
+      "type": "file"
+    },
+    {
+      "path": "src/public/styles.css",
+      "accessCount": 6,
+      "lastAccessed": 1778290307477,
+      "type": "file"
+    },
+    {
+      "path": "src/routes/auth.ts",
+      "accessCount": 5,
+      "lastAccessed": 1778281353358,
+      "type": "file"
+    },
+    {
+      "path": "src/public/index.html",
+      "accessCount": 5,
+      "lastAccessed": 1778290338197,
+      "type": "file"
+    },
+    {
+      "path": "src/public/app.ts",
+      "accessCount": 4,
+      "lastAccessed": 1778286208844,
+      "type": "file"
+    },
+    {
+      "path": "tsconfig.json",
+      "accessCount": 3,
+      "lastAccessed": 1778281059691,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 3,
+      "lastAccessed": 1778281405165,
+      "type": "directory"
+    },
+    {
+      "path": "src/lib/score.ts",
+      "accessCount": 3,
+      "lastAccessed": 1778286653752,
+      "type": "file"
+    },
+    {
+      "path": "tsconfig.frontend.json",
+      "accessCount": 2,
+      "lastAccessed": 1778281059978,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 2,
+      "lastAccessed": 1778281060277,
+      "type": "file"
+    },
+    {
+      "path": "src/index.ts",
+      "accessCount": 2,
+      "lastAccessed": 1778281164091,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/types.ts",
+      "accessCount": 2,
+      "lastAccessed": 1778281377600,
+      "type": "file"
+    },
+    {
+      "path": "migrations",
+      "accessCount": 2,
+      "lastAccessed": 1778281393608,
+      "type": "directory"
+    },
+    {
+      "path": "scripts/smoke-test.js",
+      "accessCount": 2,
+      "lastAccessed": 1778281411701,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/llm.ts",
+      "accessCount": 2,
+      "lastAccessed": 1778285645853,
+      "type": "file"
+    },
+    {
+      "path": "wrangler.jsonc",
+      "accessCount": 1,
+      "lastAccessed": 1778280617292,
+      "type": "file"
+    },
+    {
+      "path": ".env.example",
+      "accessCount": 1,
+      "lastAccessed": 1778280617595,
+      "type": "file"
+    },
+    {
+      "path": "migrations/0001_init.sql",
+      "accessCount": 1,
+      "lastAccessed": 1778280740024,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/config.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778280740631,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/github.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778280740922,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/db.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778280741828,
+      "type": "file"
+    },
+    {
+      "path": "src/lib/auth.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778280742135,
+      "type": "file"
+    },
+    {
+      "path": "scripts/validate-sql.js",
+      "accessCount": 1,
+      "lastAccessed": 1778280932064,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 1,
+      "lastAccessed": 1778280970198,
+      "type": "file"
+    },
+    {
+      "path": "scripts",
+      "accessCount": 1,
+      "lastAccessed": 1778281405111,
+      "type": "directory"
+    },
+    {
+      "path": ".dev.vars",
+      "accessCount": 1,
+      "lastAccessed": 1778283100769,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

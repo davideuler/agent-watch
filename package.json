@@ -1,0 +1,30 @@
+{
+  "name": "agent-watch",
+  "version": "0.1.0",
+  "description": "Monitor OpenClaw and Hermes release stability via GitHub issues + LLM analysis",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "npm run typecheck && npm run build:frontend",
+    "build:frontend": "node scripts/build-frontend.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.frontend.json",
+    "deploy": "npm run build && wrangler deploy",
+    "db:create": "wrangler d1 create agent-watch",
+    "db:migrate": "wrangler d1 migrations apply agent-watch --remote",
+    "db:migrate:local": "wrangler d1 migrations apply agent-watch --local",
+    "validate:sql": "node scripts/validate-sql.js",
+    "smoke": "node scripts/smoke-test.js",
+    "test": "npm run typecheck && npm run validate:sql && npm run smoke"
+  },
+  "dependencies": {
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251208.0",
+    "better-sqlite3": "^11.5.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.2",
+    "wrangler": "^3.95.0"
+  }
+}

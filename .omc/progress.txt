@@ -1,0 +1,35 @@
+Agent Watch — implementation summary
+
+Stack chosen
+- Cloudflare Workers + Hono v4 (route + middleware)
+- D1 (sqlite) for storage
+- KV for cache (bound, used by future enhancements)
+- Static SPA bundled with esbuild → ASSETS binding (single-page-application fallback)
+- esbuild for frontend; tsc --noEmit for both worker and frontend tsconfigs
+
+Files added
+- package.json, tsconfig.json, tsconfig.frontend.json, wrangler.jsonc, .env.example, .gitignore
+- migrations/0001_init.sql (projects, versions, issues, issue_comments, issue_analyses, users, sessions, user_ratings, poll_state)
+- src/index.ts (Hono app, scheduled handler, /healthz, /cron/run admin, SPA fallback)
+- src/routes/api.ts (projects, versions, issues, ratings, auth/me, logout)
+- src/routes/auth.ts (GitHub + Google OAuth flows with CSRF state cookie)
+- src/lib/types.ts, config.ts, github.ts, llm.ts, score.ts, db.ts, auth.ts, poll.ts
+- src/public/index.html, styles.css, app.ts (vanilla TS SPA)
+- scripts/build-frontend.js, validate-sql.js, smoke-test.js
+- README.md (Chinese requirements + deployment guide)
+
+Key decisions
+- Two tsconfigs: worker uses @cloudflare/workers-types, frontend uses DOM lib. Cannot share via project references because both need noEmit.
+- Stability score = base 5 ± weighted sum of negative/positive issues (recency × log(comments) × confidence), then blended with user ratings up to 60% weight at saturation. New version (<3h) returns grey 5 short-circuit.
+- Color: <5 red interpolation, =5 grey #9ca3af, >5 green interpolation. RGB hex strings.
+- LLM uses OpenAI Chat Completions JSON mode; works for any compatible provider via LLM_BASE_URL.
+- Cron: hourly. /cron/run is also exposed for manual triggers (gated by SESSION_SECRET).
+- Auth: 30-day random hex token in httpOnly cookie, sessions table in D1.
+- SPA: server returns index.html for non-API non-asset routes via ASSETS.fetch with not_found_handling=single-page-application.
+
+Verification results
+- npm run build: PASS
+- npm test (typecheck + SQL + smoke): PASS
+- npx wrangler deploy --dry-run: PASS (120.83 KiB / gzip 29.99 KiB)
+- 6/6 score smoke-test cases pass (grey 5, neg drop, pos rise, ratings blend, clamp, neutral)
+- SQL validation: 9 tables present

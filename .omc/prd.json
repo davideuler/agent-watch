@@ -1,0 +1,78 @@
+{
+  "task": "完整实现 Agent Watch 产品 — 监控 OpenClaw 和 Hermes 项目 GitHub issue 反馈、计算版本稳定性、用户评分、部署到 Cloudflare（agentwatch.aicompass.dev）",
+  "stack": "Cloudflare Workers + Hono + D1 + KV + Static frontend (vanilla TS/HTML/CSS)",
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "项目脚手架 (Cloudflare Workers + Hono + TypeScript)",
+      "passes": true,
+      "verification": "package.json/tsconfig.json/wrangler.jsonc/.env.example 已创建; npm install 成功; npm run typecheck 零错误"
+    },
+    {
+      "id": "US-002",
+      "title": "D1 数据库 schema 与迁移文件",
+      "passes": true,
+      "verification": "migrations/0001_init.sql 含 9 表; node scripts/validate-sql.js 通过 sqlite 解析校验"
+    },
+    {
+      "id": "US-003",
+      "title": "GitHub API 客户端",
+      "passes": true,
+      "verification": "src/lib/github.ts 导出 fetchReleases/fetchIssues/fetchIssueComments，GITHUB_TOKEN 走 Authorization 头，UA=agent-watch，限默认 15/10"
+    },
+    {
+      "id": "US-004",
+      "title": "LLM 分析层（OpenAI-compatible）",
+      "passes": true,
+      "verification": "src/lib/llm.ts analyzeIssue 从 LLM_BASE_URL/MODEL/KEY 读取，使用 chat/completions JSON mode，失败 fallback neutral"
+    },
+    {
+      "id": "US-005",
+      "title": "版本稳定性评分算法",
+      "passes": true,
+      "verification": "scripts/smoke-test.js 6 个用例全部通过：grey 5 新版本、负面降分、正面升分、用户评分混合、clamp[0,10]、空信号灰色"
+    },
+    {
+      "id": "US-006",
+      "title": "Worker HTTP 路由 (API + 静态资源)",
+      "passes": true,
+      "verification": "src/routes/api.ts 暴露 /api/projects/{,:slug}, /api/versions/:id/issues, POST /api/ratings, /api/auth/me; index.ts SPA fallback 用 ASSETS.fetch"
+    },
+    {
+      "id": "US-007",
+      "title": "GitHub OAuth 登录",
+      "passes": true,
+      "verification": "src/routes/auth.ts /github + /github/callback，state cookie CSRF，token 换 user，缺配置时 503"
+    },
+    {
+      "id": "US-008",
+      "title": "Google OAuth 登录",
+      "passes": true,
+      "verification": "src/routes/auth.ts /google + /google/callback，scope=openid email profile，userinfo upsert"
+    },
+    {
+      "id": "US-009",
+      "title": "Cron 定时拉取与分析",
+      "passes": true,
+      "verification": "wrangler.jsonc crons '0 * * * *'; src/lib/poll.ts pollOnce 遍历 PROJECTS、upsert release/issue/comment、调用 LLM 写 issue_analyses；index.ts scheduled() 调用"
+    },
+    {
+      "id": "US-010",
+      "title": "前端仪表盘",
+      "passes": true,
+      "verification": "src/public/index.html + app.ts + styles.css，esbuild 打包 9.2kb；项目 tab、版本卡片彩色条、issue 折叠、1-10 stars 评分、GitHub/Google 登录"
+    },
+    {
+      "id": "US-011",
+      "title": "完整环境变量配置文档",
+      "passes": true,
+      "verification": ".env.example 含全部变量 + 注释；src/lib/config.ts 解析 PROJECTS；README.md 含 Cloudflare 部署 + 自定义域名说明"
+    },
+    {
+      "id": "US-012",
+      "title": "构建与本地验证",
+      "passes": true,
+      "verification": "npm run build 通过；npm test 通过 (typecheck + sql + smoke)；npx wrangler deploy --dry-run 成功，120 KiB worker"
+    }
+  ]
+}

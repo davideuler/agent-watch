@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agent-watch",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "agentwatch.aicompass.dev",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "./dist/public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agent-watch",
+      "database_id": "REPLACE_WITH_REAL_D1_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "REPLACE_WITH_REAL_KV_ID"
+    }
+  ],
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  "vars": {
+    "PROJECTS": "openclaw=openclaw/openclaw,hermes=getzep/hermes",
+    "DEFAULT_PROJECT": "openclaw",
+    "LLM_BASE_URL": "https://api.openai.com/v1",
+    "LLM_MODEL_NAME": "gpt-4o-mini",
+    "PUBLIC_BASE_URL": "https://agentwatch.aicompass.dev"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

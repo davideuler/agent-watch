@@ -1,0 +1,178 @@
+import { Hono } from 'hono';
+import type { Env } from '../lib/types';
+import { getDefaultProjectSlug, getProjects } from '../lib/config';
+import {
+  getProjectBySlug,
+  getVersionById,
+  listIssuesForProject,
+  listProjects,
+  listRatingsForProject,
+  listRatingsForVersion,
+  listVersions,
+  upsertProject,
+  upsertRating,
+} from '../lib/db';
+import { calculateStability, type AnalyzedIssue, type UserRatingInput } from '../lib/score';
+import { currentUser, endSession } from '../lib/auth';
+
+const api = new Hono<{ Bindings: Env }>();
+
+async function ensureProjects(env: Env): Promise<void> {
+  const cfg = getProjects(env);
+  for (const p of cfg) {
+    const existing = await getProjectBySlug(env, p.slug);
+    if (!existing) await upsertProject(env, p.slug, p.name, p.repo);
+  }
+}
+
+api.get('/projects', async (c) => {
+  await ensureProjects(c.env);
+  const cfg = getProjects(c.env);
+  const defaultSlug = getDefaultProjectSlug(c.env);
+  const rows = await listProjects(c.env);
+  const byslug = new Map(rows.map((r) => [r.slug, r]));
+  const out = cfg.map((p) => ({
+    slug: p.slug,
+    name: p.name,
+    github_url: p.githubUrl,
+    is_default: p.slug === defaultSlug,
+    has_data: byslug.has(p.slug),
+  }));
+  return c.json({ projects: out, default: defaultSlug });
+});
+
+api.get('/projects/:slug', async (c) => {
+  await ensureProjects(c.env);
+  const slug = c.req.param('slug');
+  const project = await getProjectBySlug(c.env, slug);
+  if (!project) return c.json({ error: 'project not found' }, 404);
+
+  const versions = await listVersions(c.env, project.id, 15);
+  const issues = await listIssuesForProject(c.env, project.id);
+  const ratings = await listRatingsForProject(c.env, project.id);
+
+  const ratingsByVersion = new Map<number, UserRatingInput[]>();
+  for (const r of ratings) {
+    if (!ratingsByVersion.has(r.version_id)) ratingsByVersion.set(r.version_id, []);
+    ratingsByVersion.get(r.version_id)!.push({ score: r.score });
+  }
+
+  const versionsWithScore = versions.map((v) => {
+    const versionIssues: AnalyzedIssue[] = issues
+      .filter((i) => i.target_version === v.tag_name && i.sentiment)
+      .map((i) => ({
+        sentiment: (i.sentiment as 'positive' | 'negative' | 'neutral') ?? 'neutral',
+        confidence: i.confidence ?? 0,
+        comment_count: i.comment_count,
+        created_at: i.created_at,
+      }));
+    const stability = calculateStability(
+      { publishedAt: v.published_at },
+      versionIssues,
+      ratingsByVersion.get(v.id) ?? [],
+    );
+    return {
+      id: v.id,
+      tag_name: v.tag_name,
+      name: v.name,
+      body: v.body,
+      html_url: v.html_url,
+      download_url: v.download_url,
+      published_at: v.published_at,
+      is_prerelease: !!v.is_prerelease,
+      stability,
+      issue_count: versionIssues.length,
+      rating_count: (ratingsByVersion.get(v.id) ?? []).length,
+    };
+  });
+
+  return c.json({
+    project: {
+      slug: project.slug,
+      name: project.name,
+      github_repo: project.github_repo,
+      github_url: project.github_url,
+    },
+    versions: versionsWithScore,
+  });
+});
+
+api.get('/versions/:id/issues', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.json({ error: 'invalid id' }, 400);
+  const version = await getVersionById(c.env, id);
+  if (!version) return c.json({ error: 'version not found' }, 404);
+  const issues = await listIssuesForProject(c.env, version.project_id);
+  const related = issues
+    .filter((i) => i.target_version === version.tag_name)
+    .map((i) => ({
+      id: i.id,
+      number: i.number,
+      title: i.title,
+      html_url: i.html_url,
+      state: i.state,
+      user_login: i.user_login,
+      comment_count: i.comment_count,
+      created_at: i.created_at,
+      sentiment: i.sentiment,
+      confidence: i.confidence,
+      summary: i.summary,
+    }));
+  const ratings = await listRatingsForVersion(c.env, version.id);
+  return c.json({
+    version: {
+      id: version.id,
+      tag_name: version.tag_name,
+      name: version.name,
+      published_at: version.published_at,
+      download_url: version.download_url,
+      html_url: version.html_url,
+    },
+    issues: related,
+    ratings: ratings.map((r) => ({
+      score: r.score,
+      comment: r.comment,
+      created_at: r.created_at,
+    })),
+  });
+});
+
+api.post('/ratings', async (c) => {
+  const user = await currentUser(c);
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+  const body = (await c.req
+    .json<{ version_id?: number; score?: number; comment?: string }>()
+    .catch(() => ({}))) as { version_id?: number; score?: number; comment?: string };
+  const versionId = Number(body.version_id);
+  const score = Number(body.score);
+  const comment = body.comment ? String(body.comment).slice(0, 2000) : null;
+  if (!Number.isInteger(versionId)) return c.json({ error: 'version_id required' }, 400);
+  if (!Number.isInteger(score) || score < 1 || score > 10) return c.json({ error: 'score must be 1..10' }, 400);
+  const version = await getVersionById(c.env, versionId);
+  if (!version) return c.json({ error: 'version not found' }, 404);
+  await upsertRating(c.env, user.id, versionId, score, comment);
+  return c.json({ ok: true });
+});
+
+api.get('/auth/me', async (c) => {
+  const user = await currentUser(c);
+  if (!user) return c.json({ user: null });
+  return c.json({
+    user: {
+      id: user.id,
+      provider: user.provider,
+      name: user.name,
+      login: user.login,
+      avatar_url: user.avatar_url,
+    },
+  });
+});
+
+api.post('/auth/logout', async (c) => {
+  await endSession(c);
+  return c.json({ ok: true });
+});
+
+api.all('*', (c) => c.json({ error: 'not found' }, 404));
+
+export default api;
