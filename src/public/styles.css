@@ -867,6 +867,18 @@ a:hover {
 .footer-sep { opacity: 0.4; }
 .footer a { color: var(--text-mute); }
 .footer a:hover { color: var(--accent); text-decoration: none; }
+.footer .footer-brand-link {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.24em;
+}
+.footer .footer-brand-link:hover {
+  color: var(--accent-dim);
+  text-decoration: underline;
+}
 
 /* ── RESPONSIVE ── */
 @media (max-width: 900px) {
