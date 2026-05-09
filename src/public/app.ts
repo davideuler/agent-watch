@@ -178,19 +178,21 @@ function renderProjectStats(data: ProjectDetail) {
     : 0;
   const stable = versions.filter((version) => version.stability.score >= 6).length;
   const issues = versions.reduce((sum, version) => sum + version.stability.breakdown.issueCount, 0);
+  const negative = versions.reduce((sum, version) => sum + version.stability.breakdown.negativeCount, 0);
   const ratings = versions.reduce((sum, version) => sum + version.stability.breakdown.ratingCount, 0);
 
-  const statItems: Array<[string, string]> = [
-    ['Average score', tracked ? avgScore.toFixed(1) : '--'],
+  const statItems: Array<[string, string, string?]> = [
+    ['Average score', tracked ? avgScore.toFixed(1) : '--', 'score'],
     ['Stable releases', `${stable}/${tracked}`],
-    ['Issue signals', String(issues)],
+    ['Issue signals', String(issues), 'issues'],
+    ['Negative signals', String(negative), 'negative'],
     ['Community ratings', String(ratings)],
   ];
 
   stats.innerHTML = statItems
     .map(
-      ([label, value]) => `
-        <div class="stat-cell">
+      ([label, value, tone]) => `
+        <div class="stat-cell${tone ? ` stat-cell-${tone}` : ''}">
           <span class="stat-value">${escapeHtml(value)}</span>
           <span class="stat-label">${escapeHtml(label)}</span>
         </div>`,
@@ -331,6 +333,7 @@ function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
 
   const scoreEl = $<HTMLElement>('.vc-score', node)!;
   scoreEl.textContent = v.stability.score.toFixed(1);
+  node.style.setProperty('--score-color', v.stability.color);
   scoreEl.style.setProperty('--score-color', v.stability.color);
   scoreEl.style.color = v.stability.color;
   $('.vc-rank', node)!.textContent = capabilityRank(v.stability.score);
@@ -339,7 +342,11 @@ function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
   stateEl.textContent =
     v.stability.state === 'analyzing'
       ? 'Scanning signal'
-      : `${v.stability.breakdown.issueCount} issues · ${v.stability.breakdown.ratingCount} ratings`;
+      : capabilityRank(v.stability.score);
+
+  $('[data-signal-issues]', node)!.textContent = String(v.stability.breakdown.issueCount);
+  $('[data-signal-negative]', node)!.textContent = String(v.stability.breakdown.negativeCount);
+  $('[data-signal-ratings]', node)!.textContent = String(v.stability.breakdown.ratingCount);
 
   const fill = $<HTMLElement>('.vc-bar-fill', node)!;
   fill.style.width = `${(v.stability.score / 10) * 100}%`;
@@ -348,7 +355,6 @@ function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
   const metaParts = [
     `Released ${formatDate(v.published_at)} · ${timeAgo(v.published_at)}`,
     v.is_prerelease ? 'pre-release' : null,
-    v.stability.breakdown.negativeCount > 0 ? `${v.stability.breakdown.negativeCount} negative` : null,
     v.stability.breakdown.positiveCount > 0 ? `${v.stability.breakdown.positiveCount} positive` : null,
   ].filter(Boolean);
   $('.vc-meta', node)!.textContent = metaParts.join(' · ');
@@ -552,7 +558,10 @@ async function renderIssuesPage(slug: string, tag: string): Promise<void> {
   metaEl.textContent = subParts.join(' · ');
 
   const total = data.issues_total ?? data.issues.length;
-  countLabel.textContent = `${data.issues.length} issue${data.issues.length === 1 ? '' : 's'}`;
+  const negativeTotal = data.issues.filter((issue) => issue.sentiment === 'negative').length;
+  countLabel.innerHTML = `
+    <span>${data.issues.length} issue${data.issues.length === 1 ? '' : 's'}</span>
+    <span class="issues-negative-count">${negativeTotal} negative</span>`;
   if (total > data.issues.length) {
     capNote.textContent = `Showing the first ${data.issues.length} of ${total} matched issues (capped at ${ISSUES_PAGE_CAP}).`;
   } else if (total === 0) {
