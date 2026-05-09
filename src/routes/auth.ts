@@ -14,6 +14,13 @@ const GH_EMAILS = 'https://api.github.com/user/emails';
 const GOOG_AUTHORIZE = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOG_TOKEN = 'https://oauth2.googleapis.com/token';
 const GOOG_USERINFO = 'https://openidconnect.googleapis.com/v1/userinfo';
+const APP_ROOT = '/';
+
+type OAuthTokenResponse = {
+  access_token?: string;
+  error?: string;
+  error_description?: string;
+};
 
 function configError(provider: string): Response {
   return new Response(`${provider} OAuth is not configured. Set ${provider.toUpperCase()}_OAUTH_CLIENT_ID and CLIENT_SECRET.`, {
@@ -22,9 +29,25 @@ function configError(provider: string): Response {
   });
 }
 
+function tokenError(provider: string, status: number, body: OAuthTokenResponse): Response {
+  const detail = body.error_description ?? body.error ?? `HTTP ${status}`;
+  return new Response(`${provider} OAuth token exchange failed: ${detail}`, {
+    status: 502,
+    headers: { 'content-type': 'text/plain' },
+  });
+}
+
+function cleanAuthStartUrl(c: { req: { raw: Request } }, path: '/auth/github' | '/auth/google'): URL | null {
+  const current = new URL(c.req.raw.url);
+  if (!current.search && !current.hash && current.pathname === path) return null;
+  return new URL(path, current.origin);
+}
+
 auth.get('/github', (c) => {
   const env = c.env;
   if (!env.GITHUB_OAUTH_CLIENT_ID || !env.GITHUB_OAUTH_CLIENT_SECRET) return configError('github');
+  const cleanUrl = cleanAuthStartUrl(c, '/auth/github');
+  if (cleanUrl) return c.redirect(cleanUrl.toString());
   const state = randomToken(16);
   setOAuthState(c, 'github', state);
   const redirectUri = `${getPublicBaseUrl(env, c.req.raw)}/auth/github/callback`;
@@ -43,6 +66,7 @@ auth.get('/github/callback', async (c) => {
   const state = c.req.query('state');
   const expected = readOAuthState(c, 'github');
   if (!code || !state || state !== expected) return c.text('Invalid OAuth state', 400);
+  const redirectUri = `${getPublicBaseUrl(env, c.req.raw)}/auth/github/callback`;
 
   const tokRes = await fetch(GH_TOKEN, {
     method: 'POST',
@@ -51,10 +75,11 @@ auth.get('/github/callback', async (c) => {
       client_id: env.GITHUB_OAUTH_CLIENT_ID,
       client_secret: env.GITHUB_OAUTH_CLIENT_SECRET,
       code,
+      redirect_uri: redirectUri,
     }),
   });
-  if (!tokRes.ok) return c.text(`GitHub token exchange failed: ${tokRes.status}`, 502);
-  const tokJson = (await tokRes.json()) as { access_token?: string; error?: string };
+  const tokJson = (await tokRes.json()) as OAuthTokenResponse;
+  if (!tokRes.ok) return tokenError('GitHub', tokRes.status, tokJson);
   const accessToken = tokJson.access_token;
   if (!accessToken) return c.text(`GitHub OAuth: ${tokJson.error ?? 'no token'}`, 502);
 
@@ -90,12 +115,14 @@ auth.get('/github/callback', async (c) => {
     avatar_url: ghUser.avatar_url,
   });
   await startSession(c, user.id);
-  return c.redirect('/');
+  return c.redirect(APP_ROOT);
 });
 
 auth.get('/google', (c) => {
   const env = c.env;
   if (!env.GOOGLE_OAUTH_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET) return configError('google');
+  const cleanUrl = cleanAuthStartUrl(c, '/auth/google');
+  if (cleanUrl) return c.redirect(cleanUrl.toString());
   const state = randomToken(16);
   setOAuthState(c, 'google', state);
   const redirectUri = `${getPublicBaseUrl(env, c.req.raw)}/auth/google/callback`;
@@ -151,7 +178,7 @@ auth.get('/google/callback', async (c) => {
     avatar_url: gUser.picture,
   });
   await startSession(c, user.id);
-  return c.redirect('/');
+  return c.redirect(APP_ROOT);
 });
 
 export default auth;

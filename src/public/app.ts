@@ -71,6 +71,18 @@ const state = {
   currentSlug: '' as string,
 };
 
+const PROJECT_STORAGE_KEY = 'agent-watch-project';
+const AUTH_START_PATHS = new Set(['/auth/github', '/auth/google']);
+
+function normalizePath(pathname: string): string {
+  return pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
+}
+
+const currentPath = normalizePath(location.pathname);
+if (AUTH_START_PATHS.has(currentPath) && (location.search || location.hash)) {
+  window.location.replace(`${location.origin}${currentPath}`);
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -166,13 +178,43 @@ function renderAuth() {
     });
   } else {
     el.innerHTML = `
-      <a class="auth-btn" href="/auth/github">Sign in with GitHub</a>
-      <a class="auth-btn" href="/auth/google">Sign in with Google</a>`;
+      <a class="auth-btn" href="/auth/github" data-auth-provider="github">Sign in with GitHub</a>
+      <a class="auth-btn" href="/auth/google" data-auth-provider="google">Sign in with Google</a>`;
+    $$<HTMLAnchorElement>('[data-auth-provider]', el).forEach((link) => {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        window.location.assign(link.pathname);
+      });
+    });
   }
 }
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+function projectSlugFromUrl(): string {
+  const params = new URLSearchParams(location.search);
+  const explicit = params.get('project')?.trim() || location.hash.replace('#', '').trim();
+  if (explicit) return explicit;
+  try {
+    return sessionStorage.getItem(PROJECT_STORAGE_KEY)?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function setProjectUrl(slug: string, mode: 'push' | 'replace' = 'push'): void {
+  try {
+    sessionStorage.setItem(PROJECT_STORAGE_KEY, slug);
+  } catch {
+    // Ignore storage failures; the selected project still lives in memory.
+  }
+  const url = new URL(location.href);
+  url.pathname = '/';
+  url.search = '';
+  url.hash = '';
+  history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', url);
 }
 
 async function loadProjectsList() {
@@ -188,13 +230,14 @@ async function loadProjectsList() {
     tabsEl.appendChild(btn);
   }
   const known = new Set(data.projects.map((p) => p.slug));
-  const initial = location.hash.replace('#', '') || data.default;
-  switchProject(known.has(initial) ? initial : data.default);
+  const initial = projectSlugFromUrl() || data.default;
+  const slug = known.has(initial) ? initial : data.default;
+  await switchProject(slug, 'replace');
 }
 
-async function switchProject(slug: string) {
+async function switchProject(slug: string, urlMode: 'push' | 'replace' = 'push') {
   state.currentSlug = slug;
-  location.hash = slug;
+  setProjectUrl(slug, urlMode);
   $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.slug === slug));
   await renderProject();
 }
@@ -381,9 +424,9 @@ function paintStars(root: HTMLElement, count: number, cls: 'hover' | 'active') {
   for (let i = 0; i < count && i < stars.length; i++) stars[i]!.classList.add(cls);
 }
 
-window.addEventListener('hashchange', () => {
-  const slug = location.hash.replace('#', '');
-  if (slug && slug !== state.currentSlug) switchProject(slug);
+window.addEventListener('popstate', () => {
+  const slug = projectSlugFromUrl();
+  if (slug && slug !== state.currentSlug) switchProject(slug, 'replace');
 });
 
 loadAuth().then(loadProjectsList).catch((err) => {
