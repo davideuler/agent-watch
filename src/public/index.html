@@ -31,13 +31,13 @@
         <span class="brand-tag">// release superpower console</span>
       </div>
       <nav class="project-tabs" id="project-tabs"></nav>
-      <div class="theme-picker" id="theme-picker" role="group" aria-label="Choose theme">
-        <button class="theme-swatch" data-theme-value="light"    title="Light"></button>
-        <button class="theme-swatch" data-theme-value="dark"     title="Dark"></button>
-        <button class="theme-swatch" data-theme-value="ocean"    title="Ocean"></button>
-        <button class="theme-swatch" data-theme-value="terminal" title="Terminal"></button>
-        <button class="theme-swatch" data-theme-value="rose"     title="Rose"></button>
-      </div>
+      <select class="theme-select" id="theme-select" aria-label="Choose theme">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+        <option value="ocean">Ocean</option>
+        <option value="terminal">Terminal</option>
+        <option value="rose">Rose</option>
+      </select>
       <div class="auth-area" id="auth-area">
         <span class="auth-loading muted">··· auth</span>
       </div>
@@ -118,22 +118,11 @@
         function setTheme(name) {
           document.documentElement.setAttribute('data-theme', name);
           try { localStorage.setItem('agent-watch-theme', name); } catch (e) {}
-          document.querySelectorAll('.theme-swatch').forEach(function(s) {
-            s.classList.toggle('active', s.getAttribute('data-theme-value') === name);
-          });
         }
-        var picker = document.getElementById('theme-picker');
-        if (!picker) return;
-        picker.addEventListener('click', function(e) {
-          var btn = e.target.closest('.theme-swatch');
-          if (!btn) return;
-          setTheme(btn.getAttribute('data-theme-value'));
-        });
-        // mark active swatch on load
-        var cur = document.documentElement.getAttribute('data-theme') || 'light';
-        document.querySelectorAll('.theme-swatch').forEach(function(s) {
-          s.classList.toggle('active', s.getAttribute('data-theme-value') === cur);
-        });
+        var sel = document.getElementById('theme-select');
+        if (!sel) return;
+        sel.value = document.documentElement.getAttribute('data-theme') || 'light';
+        sel.addEventListener('change', function() { setTheme(sel.value); });
       })();
     </script>
     <script type="module" src="/app.js"></script>
