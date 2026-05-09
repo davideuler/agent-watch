@@ -31,7 +31,7 @@
     }
   ],
   "triggers": {
-    "crons": ["0 * * * *"]
+    "crons": ["*/20 * * * *"]
   },
   "vars": {
     "PROJECTS": "openclaw=openclaw/openclaw,hermes=getzep/hermes",

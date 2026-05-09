@@ -59,7 +59,7 @@ export async function pollOnce(env: Env): Promise<{ project: string; releases: n
       const state = await getPollState(env, project.id);
       const issues = await fetchIssues(env, p.repo, {
         since: state.last_issue_updated_at ?? undefined,
-        pages: 5,
+        pages: 2,
       });
       let maxUpdated = state.last_issue_updated_at;
       for (const issue of issues) {
