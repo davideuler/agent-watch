@@ -1,3 +1,5 @@
+import { formatReleaseDate, getReleaseDisplay, googleAnalyticsScriptSrc } from './release-display';
+
 interface ProjectListItem {
   slug: string;
   name: string;
@@ -62,6 +64,14 @@ interface VersionIssuesResponse {
 
 interface MeResponse {
   user: { id: number; provider: string; name: string | null; login: string | null; avatar_url: string | null } | null;
+}
+
+declare global {
+  interface Window {
+    AGENT_WATCH_CONFIG?: { googleAnalyticsMeasurementId?: string };
+    dataLayer?: unknown[];
+    gtag?: (...args: unknown[]) => void;
+  }
 }
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T | null;
@@ -138,9 +148,37 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function initGoogleAnalytics(): void {
+  const measurementId = window.AGENT_WATCH_CONFIG?.googleAnalyticsMeasurementId;
+  const src = googleAnalyticsScriptSrc(measurementId);
+  if (!src || !measurementId || document.querySelector('[data-agent-watch-ga]')) return;
+
+  window.dataLayer = window.dataLayer ?? [];
+  window.gtag = (...args: unknown[]) => {
+    window.dataLayer!.push(args);
+  };
+  window.gtag('js', new Date());
+  window.gtag('config', measurementId, { send_page_view: false });
+
+  const script = document.createElement('script');
+  script.async = true;
+  script.src = src;
+  script.dataset.agentWatchGa = 'true';
+  document.head.appendChild(script);
+}
+
+function trackPageView(): void {
+  const measurementId = window.AGENT_WATCH_CONFIG?.googleAnalyticsMeasurementId;
+  if (!measurementId || !window.gtag) return;
+  window.gtag('event', 'page_view', {
+    page_location: location.href,
+    page_path: `${location.pathname}${location.search}${location.hash}`,
+    page_title: document.title,
+  });
+}
+
 function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return formatReleaseDate(iso);
 }
 
 function timeAgo(iso: string): string {
@@ -248,12 +286,13 @@ function rememberSlug(slug: string): void {
   }
 }
 
-function pushUrl(path: string, mode: 'push' | 'replace' = 'push'): void {
+function pushUrl(path: string, mode: 'push' | 'replace' = 'push', shouldTrackPageView = true): void {
   const url = new URL(location.href);
   url.pathname = path;
   url.search = '';
   url.hash = '';
   history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', url);
+  if (shouldTrackPageView) trackPageView();
 }
 
 function setView(name: 'home' | 'issues'): void {
@@ -327,9 +366,11 @@ function applyProjectDetail(data: ProjectDetail): void {
 function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
   const tpl = $<HTMLTemplateElement>('#version-card-template')!;
   const node = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
+  const releaseDisplay = getReleaseDisplay(v);
 
-  $('.vc-tag', node)!.textContent = v.tag_name;
-  $('.vc-name', node)!.textContent = v.name && v.name !== v.tag_name ? v.name : '';
+  $('.vc-tag', node)!.textContent = releaseDisplay.version;
+  $('.vc-date', node)!.textContent = `Released ${formatDate(v.published_at)}`;
+  $('.vc-name', node)!.textContent = releaseDisplay.subtitle;
 
   const scoreEl = $<HTMLElement>('.vc-score', node)!;
   scoreEl.textContent = v.stability.score.toFixed(1);
@@ -550,10 +591,11 @@ async function renderIssuesPage(slug: string, tag: string): Promise<void> {
   }
 
   const projectName = data.project?.name ?? slug;
+  const releaseDisplay = getReleaseDisplay(data.version);
   eyebrowEl.textContent = `// ${projectName} · ${data.version.tag_name}`;
-  titleEl.textContent = `${data.version.tag_name} — related issues`;
+  titleEl.textContent = `${releaseDisplay.version} — related issues`;
   const subParts: string[] = [];
-  if (data.version.name && data.version.name !== data.version.tag_name) subParts.push(data.version.name);
+  if (releaseDisplay.subtitle) subParts.push(releaseDisplay.subtitle);
   subParts.push(`Released ${formatDate(data.version.published_at)} · ${timeAgo(data.version.published_at)}`);
   metaEl.textContent = subParts.join(' · ');
 
@@ -591,7 +633,7 @@ async function rerenderActiveRoute(): Promise<void> {
 }
 
 window.addEventListener('popstate', () => {
-  void handleRoute('replace');
+  void handleRoute('replace').then(trackPageView);
 });
 
 async function handleRoute(_urlMode: 'push' | 'replace'): Promise<void> {
@@ -605,7 +647,7 @@ async function handleRoute(_urlMode: 'push' | 'replace'): Promise<void> {
     state.currentSlug = slug;
     rememberSlug(slug);
     if (slug !== route.slug) {
-      pushUrl(projectPath(slug), 'replace');
+      pushUrl(projectPath(slug), 'replace', false);
       setView('home');
       highlightTab(slug);
       await renderProject();
@@ -625,7 +667,7 @@ async function handleRoute(_urlMode: 'push' | 'replace'): Promise<void> {
   state.currentSlug = desiredSlug;
   rememberSlug(desiredSlug);
   if (route.kind !== 'project' || route.slug !== desiredSlug) {
-    pushUrl(projectPath(desiredSlug), 'replace');
+    pushUrl(projectPath(desiredSlug), 'replace', false);
   }
   setView('home');
   highlightTab(desiredSlug);
@@ -633,6 +675,7 @@ async function handleRoute(_urlMode: 'push' | 'replace'): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
+  initGoogleAnalytics();
   const initialRoute = parseRoute(location.pathname, location.search, location.hash);
   const initialSlug =
     initialRoute.kind === 'project' || initialRoute.kind === 'issues' ? initialRoute.slug : '';
@@ -665,23 +708,24 @@ async function bootstrap(): Promise<void> {
     state.currentSlug = slug;
     rememberSlug(slug);
     if (slug !== initialRoute.slug) {
-      pushUrl(projectPath(slug), 'replace');
+      pushUrl(projectPath(slug), 'replace', false);
       setView('home');
       highlightTab(slug);
       await renderProject();
     } else {
-      pushUrl(issuesPath(slug, initialRoute.tag), 'replace');
+      pushUrl(issuesPath(slug, initialRoute.tag), 'replace', false);
       highlightTab(slug);
       await renderIssuesPage(slug, initialRoute.tag);
     }
     await authPromise;
+    trackPageView();
     return;
   }
 
   const slug = known.has(initialSlug) ? initialSlug : projectsData.default;
   state.currentSlug = slug;
   rememberSlug(slug);
-  pushUrl(projectPath(slug), 'replace');
+  pushUrl(projectPath(slug), 'replace', false);
   setView('home');
   highlightTab(slug);
 
@@ -697,6 +741,7 @@ async function bootstrap(): Promise<void> {
   }
 
   await authPromise;
+  trackPageView();
 }
 
 void bootstrap();

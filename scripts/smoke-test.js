@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const tmpDir = join(root, '.smoke');
+const tmpDir = join(root, '.smoke-score');
 
 async function main() {
   await mkdir(tmpDir, { recursive: true });

@@ -63,6 +63,7 @@ All config is via environment variables — see `.env.example` for the full list
 | `GITHUB_OAUTH_CLIENT_ID` / `_SECRET` | GitHub login app credentials | — |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Google login app credentials | — |
 | `SESSION_SECRET` | Random ≥32-char string; also gates `/cron/run` admin endpoint | — |
+| `PUBLIC_GA_MEASUREMENT_ID` | Optional Google Analytics 4 measurement ID; leave empty to disable GA | `G-…` |
 
 ### OAuth callback URLs
 

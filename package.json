@@ -14,7 +14,7 @@
     "db:migrate": "wrangler d1 migrations apply agent-watch --remote",
     "db:migrate:local": "wrangler d1 migrations apply agent-watch --local",
     "validate:sql": "node scripts/validate-sql.js",
-    "smoke": "node scripts/smoke-test.js",
+    "smoke": "node scripts/run-smoke-tests.js",
     "test": "npm run typecheck && npm run validate:sql && npm run smoke"
   },
   "dependencies": {

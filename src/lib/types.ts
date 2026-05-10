@@ -6,6 +6,7 @@ export interface Env {
   PROJECTS?: string;
   DEFAULT_PROJECT?: string;
   PUBLIC_BASE_URL?: string;
+  PUBLIC_GA_MEASUREMENT_ID?: string;
 
   GITHUB_TOKEN?: string;
 

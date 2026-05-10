@@ -15,7 +15,7 @@ async function copyDir(from, to) {
     const dst = join(to, entry);
     const s = await stat(src);
     if (s.isDirectory()) await copyDir(src, dst);
-    else if (entry !== 'app.ts') await copyFile(src, dst);
+    else if (!entry.endsWith('.ts')) await copyFile(src, dst);
   }
 }
 
