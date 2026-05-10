@@ -1554,3 +1554,51 @@ a:hover {
   .issue-row-top { grid-template-columns: auto 1fr; }
   .issue-row-top .issue-state { grid-column: 1 / -1; }
 }
+
+.issues-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem 0 0.5rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.issues-pagination[hidden] { display: none; }
+.pager-btn {
+  appearance: none;
+  cursor: pointer;
+  background: var(--surface, #fff);
+  color: var(--text, #111);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+  min-width: 2.4rem;
+  line-height: 1;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.pager-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent, #4a90e2) 8%, var(--surface, #fff));
+  border-color: var(--accent, #4a90e2);
+}
+.pager-btn:focus-visible {
+  outline: 2px solid var(--accent, #4a90e2);
+  outline-offset: 2px;
+}
+.pager-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pager-btn.active {
+  background: var(--accent, #4a90e2);
+  border-color: var(--accent, #4a90e2);
+  color: #fff;
+  font-weight: 600;
+}
+.pager-ellipsis {
+  color: var(--text-mute, #888);
+  padding: 0 0.25rem;
+  user-select: none;
+}

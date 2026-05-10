@@ -290,6 +290,60 @@ async function main() {
     balanced,
   );
 
+  // Case 15: brand-new release (analyzing branch) must still surface real
+  // issueCount when issues are already attached, otherwise the dashboard
+  // total under-reports the issues users can see when they click through.
+  const newWithIssues = calculateStability(
+    { publishedAt: '2026-05-09T05:00:00Z' },
+    [
+      {
+        sentiment: 'negative',
+        confidence: 0.8,
+        comment_count: 1,
+        created_at: '2026-05-09T05:30:00Z',
+        severity: 'high',
+        impact_scope: 'broad',
+        functionality: 'core',
+        affected_user_share: 'some',
+        duplicate_cluster_size: 1,
+        workaround_status: 'unknown',
+      },
+      {
+        sentiment: 'neutral',
+        confidence: 0,
+        comment_count: 0,
+        created_at: '2026-05-09T05:30:00Z',
+      },
+    ],
+    [],
+    now,
+  );
+  assert(
+    newWithIssues.state === 'analyzing' && newWithIssues.breakdown.issueCount === 2,
+    'analyzing branch should surface real issue count, not zero',
+    newWithIssues,
+  );
+
+  // Case 16: neutral / unsentimented issues count toward issueCount but do
+  // not change neg/pos weighting.
+  const onlyNeutral = calculateStability(
+    { publishedAt: '2026-04-01T00:00:00Z' },
+    [
+      { sentiment: 'neutral', confidence: 0.3, comment_count: 0, created_at: '2026-05-01T00:00:00Z' },
+      { sentiment: 'neutral', confidence: 0.3, comment_count: 0, created_at: '2026-05-01T00:00:00Z' },
+      { sentiment: 'neutral', confidence: 0.3, comment_count: 0, created_at: '2026-05-01T00:00:00Z' },
+    ],
+    [],
+    now,
+  );
+  assert(
+    onlyNeutral.breakdown.issueCount === 3 &&
+      onlyNeutral.breakdown.negativeCount === 0 &&
+      onlyNeutral.breakdown.positiveCount === 0,
+    'neutral issues count toward issueCount but contribute no negative/positive weight',
+    onlyNeutral,
+  );
+
   // Case 14: signalCount and confidenceLevel are exposed for UI display.
   const lowSignal = calculateStability(
     { publishedAt: '2026-04-01T00:00:00Z' },

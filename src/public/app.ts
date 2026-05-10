@@ -69,6 +69,13 @@ interface VersionIssuesResponse {
   version: { id: number; tag_name: string; name: string | null; published_at: string };
   issues: IssueItem[];
   issues_total: number;
+  page?: number;
+  per_page?: number;
+  total?: number;
+  total_considered?: number;
+  total_pages?: number;
+  max_pages?: number;
+  max_per_page?: number;
   ratings: Array<{ score: number; comment: string | null; created_at: string }>;
   project?: { slug: string; name: string; github_url: string };
 }
@@ -90,7 +97,9 @@ const $$ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode =
   Array.from(root.querySelectorAll(sel)) as T[];
 
 const ISSUES_PER_CARD = 20;
-const ISSUES_PAGE_CAP = 200;
+const ISSUES_PER_PAGE = 40;
+const ISSUES_MAX_PAGES = 30;
+const ISSUES_PAGE_CAP = ISSUES_PER_PAGE * ISSUES_MAX_PAGES;
 
 const state = {
   user: null as MeResponse['user'],
@@ -113,7 +122,14 @@ if (AUTH_START_PATHS.has(currentPath) && (location.search || location.hash)) {
 type Route =
   | { kind: 'home' }
   | { kind: 'project'; slug: string }
-  | { kind: 'issues'; slug: string; tag: string };
+  | { kind: 'issues'; slug: string; tag: string; page: number };
+
+function parseIssuesPageQuery(search: string): number {
+  const params = new URLSearchParams(search);
+  const raw = Number(params.get('page'));
+  if (!Number.isFinite(raw) || raw < 1) return 1;
+  return Math.min(ISSUES_MAX_PAGES, Math.max(1, Math.floor(raw)));
+}
 
 function parseRoute(pathname: string, search: string, hash: string): Route {
   const path = normalizePath(pathname);
@@ -123,6 +139,7 @@ function parseRoute(pathname: string, search: string, hash: string): Route {
       kind: 'issues',
       slug: decodeURIComponent(issuesMatch[1]!),
       tag: decodeURIComponent(issuesMatch[2]!),
+      page: parseIssuesPageQuery(search),
     };
   }
   const projectMatch = path.match(/^\/projects\/([^/]+)$/);
@@ -145,8 +162,9 @@ function projectPath(slug: string): string {
   return `/projects/${encodeURIComponent(slug)}`;
 }
 
-function issuesPath(slug: string, tag: string): string {
-  return `/projects/${encodeURIComponent(slug)}/v/${encodeURIComponent(tag)}/issues`;
+function issuesPath(slug: string, tag: string, page: number = 1): string {
+  const base = `/projects/${encodeURIComponent(slug)}/v/${encodeURIComponent(tag)}/issues`;
+  return page > 1 ? `${base}?page=${page}` : base;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -299,8 +317,14 @@ function rememberSlug(slug: string): void {
 
 function pushUrl(path: string, mode: 'push' | 'replace' = 'push', shouldTrackPageView = true): void {
   const url = new URL(location.href);
-  url.pathname = path;
-  url.search = '';
+  const qIdx = path.indexOf('?');
+  if (qIdx >= 0) {
+    url.pathname = path.slice(0, qIdx);
+    url.search = path.slice(qIdx);
+  } else {
+    url.pathname = path;
+    url.search = '';
+  }
   url.hash = '';
   history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', url);
   if (shouldTrackPageView) trackPageView();
@@ -439,7 +463,7 @@ async function loadDetail(v: VersionItem, slug: string, root: HTMLElement) {
   let data: VersionIssuesResponse;
   try {
     data = await api<VersionIssuesResponse>(
-      `/api/versions/${v.id}/issues?limit=${ISSUES_PER_CARD}`,
+      `/api/versions/${v.id}/issues?page=1&per_page=${ISSUES_PER_CARD}`,
     );
   } catch (err) {
     issuesEl.innerHTML = `<li>Failed: ${(err as Error).message}</li>`;
@@ -454,7 +478,7 @@ async function loadDetail(v: VersionItem, slug: string, root: HTMLElement) {
     }
   }
 
-  const total = data.issues_total ?? data.issues.length;
+  const total = data.total ?? data.issues_total ?? data.issues.length;
   if (total > 0) {
     const targetTotal = Math.min(total, ISSUES_PAGE_CAP);
     allLink.hidden = false;
@@ -463,7 +487,7 @@ async function loadDetail(v: VersionItem, slug: string, root: HTMLElement) {
       total > ISSUES_PER_CARD ? `View all ${targetTotal} →` : `View page →`;
     allLink.onclick = (e) => {
       e.preventDefault();
-      void navigateToIssues(slug, v.tag_name);
+      void navigateToIssues(slug, v.tag_name, 1);
     };
   }
 
@@ -535,6 +559,18 @@ function makeEmptyFilters(): IssueFilterState {
 
 let currentIssueFilters: IssueFilterState = makeEmptyFilters();
 let currentIssueData: IssueItem[] = [];
+
+interface IssuesPageContext {
+  slug: string;
+  tag: string;
+  page: number;
+  perPage: number;
+  totalPages: number;
+  total: number;
+  totalConsidered: number;
+}
+
+let currentIssuesPageContext: IssuesPageContext | null = null;
 
 function getFacetFieldValue(item: IssueItem, field: FacetField): string {
   const v = item[field];
@@ -783,12 +819,25 @@ function paintStars(root: HTMLElement, count: number, cls: 'hover' | 'active') {
   for (let i = 0; i < count && i < stars.length; i++) stars[i]!.classList.add(cls);
 }
 
-async function navigateToIssues(slug: string, tag: string, urlMode: 'push' | 'replace' = 'push') {
-  pushUrl(issuesPath(slug, tag), urlMode);
-  await renderIssuesPage(slug, tag);
+async function navigateToIssues(
+  slug: string,
+  tag: string,
+  page: number = 1,
+  urlMode: 'push' | 'replace' = 'push',
+) {
+  pushUrl(issuesPath(slug, tag, page), urlMode);
+  await renderIssuesPage(slug, tag, page);
 }
 
-async function renderIssuesPage(slug: string, tag: string): Promise<void> {
+async function goToIssuesPage(page: number): Promise<void> {
+  const ctx = currentIssuesPageContext;
+  if (!ctx) return;
+  const target = Math.min(Math.max(1, page), ctx.totalPages);
+  if (target === ctx.page) return;
+  await navigateToIssues(ctx.slug, ctx.tag, target);
+}
+
+async function renderIssuesPage(slug: string, tag: string, page: number = 1): Promise<void> {
   setView('issues');
   highlightTab(slug);
   const list = $('#issues-page-list')!;
@@ -810,14 +859,16 @@ async function renderIssuesPage(slug: string, tag: string): Promise<void> {
     void switchProject(slug);
   };
 
+  const safePage = Math.min(Math.max(1, Math.floor(page) || 1), ISSUES_MAX_PAGES);
   let data: VersionIssuesResponse;
   try {
     data = await api<VersionIssuesResponse>(
-      `/api/projects/${encodeURIComponent(slug)}/versions/${encodeURIComponent(tag)}/issues?limit=${ISSUES_PAGE_CAP}`,
+      `/api/projects/${encodeURIComponent(slug)}/versions/${encodeURIComponent(tag)}/issues?page=${safePage}&per_page=${ISSUES_PER_PAGE}`,
     );
   } catch (err) {
     titleEl.textContent = 'Could not load issues';
     list.innerHTML = `<li class="empty">Failed: ${escapeHtml((err as Error).message)}</li>`;
+    renderIssuesPagination(null);
     return;
   }
 
@@ -830,15 +881,37 @@ async function renderIssuesPage(slug: string, tag: string): Promise<void> {
   subParts.push(`Released ${formatDate(data.version.published_at)} · ${timeAgo(data.version.published_at)}`);
   metaEl.textContent = subParts.join(' · ');
 
-  const total = data.issues_total ?? data.issues.length;
+  const total = data.total ?? data.issues_total ?? data.issues.length;
+  const considered = data.total_considered ?? Math.min(total, ISSUES_PAGE_CAP);
+  const totalPages = data.total_pages ?? Math.max(1, Math.min(ISSUES_MAX_PAGES, Math.ceil(considered / ISSUES_PER_PAGE)));
+  const serverPage = data.page ?? safePage;
+  const pageStart = total === 0 ? 0 : (serverPage - 1) * ISSUES_PER_PAGE + 1;
+  const pageEnd = Math.min(considered, serverPage * ISSUES_PER_PAGE);
   const negativeTotal = data.issues.filter((issue) => issue.sentiment === 'negative').length;
+
+  const ctx: IssuesPageContext = {
+    slug,
+    tag,
+    page: serverPage,
+    perPage: ISSUES_PER_PAGE,
+    totalPages,
+    total,
+    totalConsidered: considered,
+  };
+  currentIssuesPageContext = ctx;
+
   countLabel.innerHTML = `
-    <span>${data.issues.length} issue${data.issues.length === 1 ? '' : 's'}</span>
+    <span>${data.issues.length} issue${data.issues.length === 1 ? '' : 's'} on this page</span>
     <span class="issues-negative-count">${negativeTotal} negative</span>`;
-  if (total > data.issues.length) {
-    capNote.textContent = `Showing the first ${data.issues.length} of ${total} matched issues (capped at ${ISSUES_PAGE_CAP}).`;
-  } else if (total === 0) {
+
+  if (total === 0) {
     capNote.textContent = 'No issues are linked to this release yet.';
+  } else if (considered < total) {
+    capNote.textContent =
+      `Page ${serverPage} of ${totalPages} · showing issues ${pageStart}–${pageEnd} of ${considered} ` +
+      `(of ${total} total · capped at ${ISSUES_PAGE_CAP} for paging).`;
+  } else if (totalPages > 1) {
+    capNote.textContent = `Page ${serverPage} of ${totalPages} · showing issues ${pageStart}–${pageEnd} of ${total}.`;
   } else {
     capNote.textContent = `All ${total} matched issue${total === 1 ? '' : 's'}.`;
   }
@@ -849,17 +922,82 @@ async function renderIssuesPage(slug: string, tag: string): Promise<void> {
     if (bar) bar.hidden = true;
     currentIssueData = [];
     currentIssueFilters = makeEmptyFilters();
+    renderIssuesPagination(ctx);
     return;
   }
   currentIssueData = data.issues;
   currentIssueFilters = makeEmptyFilters();
   rerenderFilteredIssues();
+  renderIssuesPagination(ctx);
+}
+
+function renderIssuesPagination(ctx: IssuesPageContext | null): void {
+  const root = document.getElementById('issues-pagination');
+  if (!root) return;
+  if (!ctx || ctx.totalPages <= 1) {
+    root.hidden = true;
+    root.innerHTML = '';
+    return;
+  }
+  root.hidden = false;
+  root.innerHTML = '';
+
+  const make = (label: string, page: number, opts?: { active?: boolean; disabled?: boolean; ariaLabel?: string }) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `pager-btn${opts?.active ? ' active' : ''}`;
+    btn.textContent = label;
+    if (opts?.ariaLabel) btn.setAttribute('aria-label', opts.ariaLabel);
+    if (opts?.disabled) {
+      btn.disabled = true;
+    } else {
+      btn.addEventListener('click', () => {
+        void goToIssuesPage(page);
+      });
+    }
+    return btn;
+  };
+
+  root.appendChild(
+    make('‹ Prev', ctx.page - 1, { disabled: ctx.page <= 1, ariaLabel: 'Previous page' }),
+  );
+
+  // Page-number buttons: keep a small window around current.
+  const windowSize = 2;
+  const lo = Math.max(1, ctx.page - windowSize);
+  const hi = Math.min(ctx.totalPages, ctx.page + windowSize);
+
+  if (lo > 1) {
+    root.appendChild(make('1', 1));
+    if (lo > 2) {
+      const sep = document.createElement('span');
+      sep.className = 'pager-ellipsis';
+      sep.textContent = '…';
+      root.appendChild(sep);
+    }
+  }
+  for (let p = lo; p <= hi; p++) {
+    root.appendChild(make(String(p), p, { active: p === ctx.page }));
+  }
+  if (hi < ctx.totalPages) {
+    if (hi < ctx.totalPages - 1) {
+      const sep = document.createElement('span');
+      sep.className = 'pager-ellipsis';
+      sep.textContent = '…';
+      root.appendChild(sep);
+    }
+    root.appendChild(make(String(ctx.totalPages), ctx.totalPages));
+  }
+
+  root.appendChild(
+    make('Next ›', ctx.page + 1, { disabled: ctx.page >= ctx.totalPages, ariaLabel: 'Next page' }),
+  );
 }
 
 async function rerenderActiveRoute(): Promise<void> {
   const route = parseRoute(location.pathname, location.search, location.hash);
   if (route.kind === 'issues') {
-    await renderIssuesPage(route.slug, route.tag);
+    await renderIssuesPage(route.slug, route.tag, route.page);
   } else if (route.kind === 'project') {
     state.currentSlug = route.slug;
     setView('home');
@@ -889,7 +1027,7 @@ async function handleRoute(_urlMode: 'push' | 'replace'): Promise<void> {
       await renderProject();
       return;
     }
-    await renderIssuesPage(slug, route.tag);
+    await renderIssuesPage(slug, route.tag, route.page);
     return;
   }
 
@@ -949,9 +1087,9 @@ async function bootstrap(): Promise<void> {
       highlightTab(slug);
       await renderProject();
     } else {
-      pushUrl(issuesPath(slug, initialRoute.tag), 'replace', false);
+      pushUrl(issuesPath(slug, initialRoute.tag, initialRoute.page), 'replace', false);
       highlightTab(slug);
-      await renderIssuesPage(slug, initialRoute.tag);
+      await renderIssuesPage(slug, initialRoute.tag, initialRoute.page);
     }
     await authPromise;
     trackPageView();

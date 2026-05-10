@@ -18,9 +18,38 @@ import { currentUser, endSession } from '../lib/auth';
 
 const api = new Hono<{ Bindings: Env }>();
 
-const PROJECT_CACHE_VERSION = 'v1';
-const PROJECT_CACHE_TTL = 60;
+// Cache strategy: stale-while-revalidate.
+// - Long backing TTL (1 day) so the cached payload is almost always available.
+// - Fresh window of 5 minutes; beyond that we still serve the cached value
+//   immediately and kick off a background refresh via waitUntil.
+// - A short-lived "refreshing" marker prevents stampedes when many requests
+//   arrive simultaneously while the cache is stale.
+const PROJECT_CACHE_VERSION = 'v2';
+const PROJECT_CACHE_TTL = 86400;
+const PROJECT_CACHE_FRESH_SECONDS = 300;
+const PROJECT_REFRESH_LOCK_SECONDS = 60;
 const projectCacheKey = (slug: string) => `project:${PROJECT_CACHE_VERSION}:${slug}`;
+const projectRefreshKey = (slug: string) => `project:${PROJECT_CACHE_VERSION}:${slug}:refreshing`;
+
+interface CachedEntry {
+  cached_at: string;
+  payload: string;
+}
+
+function parseCachedEntry(raw: string | null): CachedEntry | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as Partial<CachedEntry>;
+    if (typeof obj.cached_at === 'string' && typeof obj.payload === 'string') return obj as CachedEntry;
+  } catch {
+    // ignore — fall through to null so the caller treats it as cold cache
+  }
+  return null;
+}
+
+function entryAgeSeconds(entry: CachedEntry): number {
+  return (Date.now() - new Date(entry.cached_at).getTime()) / 1000;
+}
 
 async function ensureProjects(env: Env): Promise<void> {
   const cfg = getProjects(env);
@@ -45,36 +74,21 @@ api.get('/projects', async (c) => {
   return c.json({ projects: out, default: defaultSlug });
 });
 
-api.get('/projects/:slug', async (c) => {
-  const slug = c.req.param('slug');
-  const cacheKey = projectCacheKey(slug);
-
-  try {
-    const cached = await c.env.CACHE.get(cacheKey);
-    if (cached) {
-      c.header('content-type', 'application/json; charset=utf-8');
-      c.header('X-Cache', 'HIT');
-      return c.body(cached);
-    }
-  } catch (err) {
-    console.error('[cache] read failed', err);
-  }
-
-  let project = await getProjectBySlug(c.env, slug);
+async function computeProjectPayload(env: Env, slug: string): Promise<string | null> {
+  let project = await getProjectBySlug(env, slug);
   if (!project) {
-    // Lazy bootstrap: only run config sync when the slug is configured but the row is missing
-    const cfgEntry = getProjects(c.env).find((p) => p.slug === slug);
+    const cfgEntry = getProjects(env).find((p) => p.slug === slug);
     if (cfgEntry) {
-      await ensureProjects(c.env);
-      project = await getProjectBySlug(c.env, slug);
+      await ensureProjects(env);
+      project = await getProjectBySlug(env, slug);
     }
-    if (!project) return c.json({ error: 'project not found' }, 404);
+    if (!project) return null;
   }
 
   const [versions, issues, ratings] = await Promise.all([
-    listVersions(c.env, project.id, 15),
-    listIssuesForProject(c.env, project.id),
-    listRatingsForProject(c.env, project.id),
+    listVersions(env, project.id, 15),
+    listIssuesForProject(env, project.id),
+    listRatingsForProject(env, project.id),
   ]);
 
   const ratingsByVersion = new Map<number, Array<UserRatingInput & { updated_at: string }>>();
@@ -84,9 +98,6 @@ api.get('/projects/:slug', async (c) => {
   }
 
   // Freeze scores for releases older than the top LIVE_VERSION_COUNT.
-  // Old releases recompute against the latest input-change time (max of
-  // version.published_at, related issue.updated_at, related rating.updated_at)
-  // instead of wall-clock now — so unchanged inputs produce a stable score.
   const LIVE_VERSION_COUNT = 3;
 
   type ScoreInputs = {
@@ -96,7 +107,10 @@ api.get('/projects/:slug', async (c) => {
     scoreNow: Date | undefined;
   };
   const inputs: ScoreInputs[] = versions.map((v, idx) => {
-    const relatedIssues = issues.filter((i) => i.target_version === v.tag_name && i.sentiment);
+    // All issues whose analyzer placed them in this release. Unsentimented
+    // issues default to "neutral" so they still count toward issueCount but
+    // contribute zero weight to the risk/positive sums.
+    const relatedIssues = issues.filter((i) => i.target_version === v.tag_name);
     const versionIssues: AnalyzedIssue[] = relatedIssues.map((i) => ({
       sentiment: (i.sentiment as 'positive' | 'negative' | 'neutral') ?? 'neutral',
       confidence: i.confidence ?? 0,
@@ -133,8 +147,6 @@ api.get('/projects/:slug', async (c) => {
     };
   });
 
-  // Pass 1: compute each version's weightedNegSum without peer context, so we can
-  // build a project-level peer median to compare each version against.
   const pass1 = inputs.map((inp) =>
     calculateStability({ publishedAt: inp.v.published_at }, inp.versionIssues, inp.ratings, inp.scoreNow),
   );
@@ -185,50 +197,123 @@ api.get('/projects/:slug', async (c) => {
     },
     versions: versionsWithScore,
   };
-  const body = JSON.stringify(payload);
+  return JSON.stringify(payload);
+}
+
+async function refreshProjectCache(env: Env, slug: string): Promise<void> {
+  const lockKey = projectRefreshKey(slug);
+  // Stampede control: only one refresh runs at a time per slug.
+  try {
+    const existingLock = await env.CACHE.get(lockKey);
+    if (existingLock) return;
+    await env.CACHE.put(lockKey, '1', { expirationTtl: PROJECT_REFRESH_LOCK_SECONDS });
+  } catch (err) {
+    console.error('[cache] lock check failed', err);
+    return;
+  }
+
+  try {
+    const payload = await computeProjectPayload(env, slug);
+    if (!payload) return;
+    const entry: CachedEntry = { cached_at: new Date().toISOString(), payload };
+    await env.CACHE.put(projectCacheKey(slug), JSON.stringify(entry), { expirationTtl: PROJECT_CACHE_TTL });
+  } catch (err) {
+    console.error('[cache] refresh failed', err);
+  } finally {
+    try {
+      await env.CACHE.delete(lockKey);
+    } catch (err) {
+      // best effort — lock will expire on its own
+      console.error('[cache] lock release failed', err);
+    }
+  }
+}
+
+api.get('/projects/:slug', async (c) => {
+  const slug = c.req.param('slug');
+  const cacheKey = projectCacheKey(slug);
+
+  let cachedRaw: string | null = null;
+  try {
+    cachedRaw = await c.env.CACHE.get(cacheKey);
+  } catch (err) {
+    console.error('[cache] read failed', err);
+  }
+
+  const entry = parseCachedEntry(cachedRaw);
+  if (entry) {
+    const ageSec = entryAgeSeconds(entry);
+    const isStale = ageSec >= PROJECT_CACHE_FRESH_SECONDS;
+    if (isStale) {
+      // Stale-while-revalidate: serve stale payload now, refresh in background.
+      c.executionCtx.waitUntil(refreshProjectCache(c.env, slug));
+    }
+    c.header('content-type', 'application/json; charset=utf-8');
+    c.header('X-Cache', isStale ? 'STALE' : 'HIT');
+    c.header('X-Cache-Age', String(Math.round(ageSec)));
+    return c.body(entry.payload);
+  }
+
+  // Cold cache: compute synchronously so the user gets data on first hit.
+  const payload = await computeProjectPayload(c.env, slug);
+  if (!payload) return c.json({ error: 'project not found' }, 404);
+
+  const fresh: CachedEntry = { cached_at: new Date().toISOString(), payload };
   c.executionCtx.waitUntil(
-    c.env.CACHE.put(cacheKey, body, { expirationTtl: PROJECT_CACHE_TTL }).catch((err) =>
+    c.env.CACHE.put(cacheKey, JSON.stringify(fresh), { expirationTtl: PROJECT_CACHE_TTL }).catch((err) =>
       console.error('[cache] write failed', err),
     ),
   );
   c.header('content-type', 'application/json; charset=utf-8');
   c.header('X-Cache', 'MISS');
-  return c.body(body);
+  return c.body(payload);
 });
 
-const ISSUES_HARD_CAP = 200;
+const ISSUES_PER_PAGE_MAX = 40;
+const ISSUES_MAX_PAGES = 30;
+const ISSUES_HARD_CAP = ISSUES_PER_PAGE_MAX * ISSUES_MAX_PAGES;
 
-function clampIssueLimit(raw: string | undefined, fallback: number): number {
+function clampPositiveInt(raw: string | undefined, fallback: number, max: number): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(ISSUES_HARD_CAP, Math.max(1, Math.floor(n)));
+  return Math.min(max, Math.max(1, Math.floor(n)));
 }
 
-async function buildVersionIssuesPayload(c: any, version: VersionRow, limit: number) {
+async function buildVersionIssuesPayload(
+  c: any,
+  version: VersionRow,
+  page: number,
+  perPage: number,
+) {
   const issues = await listIssuesForProject(c.env, version.project_id);
-  const related = issues
-    .filter((i) => i.target_version === version.tag_name)
-    .slice(0, limit)
-    .map((i) => ({
-      id: i.id,
-      number: i.number,
-      title: i.title,
-      html_url: i.html_url,
-      state: i.state,
-      user_login: i.user_login,
-      comment_count: i.comment_count,
-      created_at: i.created_at,
-      sentiment: i.sentiment,
-      confidence: i.confidence,
-      severity: i.severity,
-      impact_scope: i.impact_scope,
-      functionality: i.functionality,
-      affected_user_share: i.affected_user_share,
-      duplicate_cluster_size: i.duplicate_cluster_size,
-      workaround_status: i.workaround_status,
-      summary: i.summary,
-    }));
-  const totalRelated = issues.filter((i) => i.target_version === version.tag_name).length;
+  const allRelated = issues.filter((i) => i.target_version === version.tag_name);
+  const totalRelated = allRelated.length;
+  const considered = Math.min(totalRelated, ISSUES_HARD_CAP);
+  const totalPages = Math.max(1, Math.min(ISSUES_MAX_PAGES, Math.ceil(considered / perPage)));
+  const safePage = Math.min(page, totalPages);
+  const startIdx = (safePage - 1) * perPage;
+  const endIdx = Math.min(startIdx + perPage, considered);
+
+  const pageItems = allRelated.slice(startIdx, endIdx).map((i) => ({
+    id: i.id,
+    number: i.number,
+    title: i.title,
+    html_url: i.html_url,
+    state: i.state,
+    user_login: i.user_login,
+    comment_count: i.comment_count,
+    created_at: i.created_at,
+    sentiment: i.sentiment,
+    confidence: i.confidence,
+    severity: i.severity,
+    impact_scope: i.impact_scope,
+    functionality: i.functionality,
+    affected_user_share: i.affected_user_share,
+    duplicate_cluster_size: i.duplicate_cluster_size,
+    workaround_status: i.workaround_status,
+    summary: i.summary,
+  }));
+
   const ratings = await listRatingsForVersion(c.env, version.id);
   return {
     version: {
@@ -239,7 +324,15 @@ async function buildVersionIssuesPayload(c: any, version: VersionRow, limit: num
       download_url: version.download_url,
       html_url: version.html_url,
     },
-    issues: related,
+    issues: pageItems,
+    page: safePage,
+    per_page: perPage,
+    total: totalRelated,
+    total_considered: considered,
+    total_pages: totalPages,
+    max_pages: ISSUES_MAX_PAGES,
+    max_per_page: ISSUES_PER_PAGE_MAX,
+    // Back-compat alias for older clients that read `issues_total`.
     issues_total: totalRelated,
     ratings: ratings.map((r) => ({
       score: r.score,
@@ -254,8 +347,9 @@ api.get('/versions/:id/issues', async (c) => {
   if (!Number.isInteger(id)) return c.json({ error: 'invalid id' }, 400);
   const version = await getVersionById(c.env, id);
   if (!version) return c.json({ error: 'version not found' }, 404);
-  const limit = clampIssueLimit(c.req.query('limit'), ISSUES_HARD_CAP);
-  return c.json(await buildVersionIssuesPayload(c, version, limit));
+  const perPage = clampPositiveInt(c.req.query('per_page') ?? c.req.query('limit'), ISSUES_PER_PAGE_MAX, ISSUES_PER_PAGE_MAX);
+  const page = clampPositiveInt(c.req.query('page'), 1, ISSUES_MAX_PAGES);
+  return c.json(await buildVersionIssuesPayload(c, version, page, perPage));
 });
 
 api.get('/projects/:slug/versions/:tag/issues', async (c) => {
@@ -265,8 +359,9 @@ api.get('/projects/:slug/versions/:tag/issues', async (c) => {
   if (!project) return c.json({ error: 'project not found' }, 404);
   const version = await getVersionByTag(c.env, project.id, tag);
   if (!version) return c.json({ error: 'version not found' }, 404);
-  const limit = clampIssueLimit(c.req.query('limit'), ISSUES_HARD_CAP);
-  const payload = await buildVersionIssuesPayload(c, version, limit);
+  const perPage = clampPositiveInt(c.req.query('per_page') ?? c.req.query('limit'), ISSUES_PER_PAGE_MAX, ISSUES_PER_PAGE_MAX);
+  const page = clampPositiveInt(c.req.query('page'), 1, ISSUES_MAX_PAGES);
+  const payload = await buildVersionIssuesPayload(c, version, page, perPage);
   return c.json({
     ...payload,
     project: {
@@ -292,13 +387,18 @@ api.post('/ratings', async (c) => {
   if (!version) return c.json({ error: 'version not found' }, 404);
   await upsertRating(c.env, user.id, versionId, score, comment);
 
-  // Invalidate cached project payload so the new rating is visible immediately
+  // Invalidate cached project payload so the new rating is visible immediately.
   c.executionCtx.waitUntil(
     (async () => {
       try {
         const projects = await listProjects(c.env);
         const project = projects.find((p) => p.id === version.project_id);
-        if (project) await c.env.CACHE.delete(projectCacheKey(project.slug));
+        if (project) {
+          await c.env.CACHE.delete(projectCacheKey(project.slug));
+          // Trigger an immediate background refresh so the next request finds
+          // a fresh entry instead of paying the cold-cache cost.
+          c.executionCtx.waitUntil(refreshProjectCache(c.env, project.slug));
+        }
       } catch (err) {
         console.error('[cache] invalidate failed', err);
       }

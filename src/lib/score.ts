@@ -201,7 +201,7 @@ export function calculateStability(
         riskIndex: 0,
         baseScore: 5,
         blendedFromIssues: 5,
-        issueCount: 0,
+        issueCount: issues.length,
         negativeCount: 0,
         positiveCount: 0,
         coreIssueCount: 0,
