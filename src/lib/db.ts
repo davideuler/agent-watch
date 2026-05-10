@@ -150,13 +150,35 @@ export async function upsertComment(
 
 export async function setAnalysis(env: Env, a: Omit<IssueAnalysisRow, 'analyzed_at'>): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO issue_analyses (issue_id, sentiment, target_version, confidence, summary, raw_response, analyzed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO issue_analyses (
+       issue_id, sentiment, target_version, confidence, severity, impact_scope, functionality,
+       affected_user_share, duplicate_cluster_size, workaround_status, is_ai_generated,
+       summary, raw_response, analyzed_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(issue_id) DO UPDATE SET
        sentiment=excluded.sentiment, target_version=excluded.target_version, confidence=excluded.confidence,
+       severity=excluded.severity, impact_scope=excluded.impact_scope, functionality=excluded.functionality,
+       affected_user_share=excluded.affected_user_share, duplicate_cluster_size=excluded.duplicate_cluster_size,
+       workaround_status=excluded.workaround_status, is_ai_generated=excluded.is_ai_generated,
        summary=excluded.summary, raw_response=excluded.raw_response, analyzed_at=excluded.analyzed_at`,
   )
-    .bind(a.issue_id, a.sentiment, a.target_version, a.confidence, a.summary, a.raw_response, NOW())
+    .bind(
+      a.issue_id,
+      a.sentiment,
+      a.target_version,
+      a.confidence,
+      a.severity,
+      a.impact_scope,
+      a.functionality,
+      a.affected_user_share,
+      a.duplicate_cluster_size,
+      a.workaround_status,
+      a.is_ai_generated ? 1 : 0,
+      a.summary,
+      a.raw_response,
+      NOW(),
+    )
     .run();
 }
 
@@ -164,14 +186,23 @@ export interface IssueWithAnalysis extends IssueRow {
   sentiment: string | null;
   target_version: string | null;
   confidence: number | null;
+  severity: string | null;
+  impact_scope: string | null;
+  functionality: string | null;
+  affected_user_share: string | null;
+  duplicate_cluster_size: number | null;
+  workaround_status: string | null;
+  is_ai_generated: number | null;
   summary: string | null;
 }
 
 export async function listIssuesForProject(env: Env, projectId: number): Promise<IssueWithAnalysis[]> {
   const r = await env.DB.prepare(
-    `SELECT i.*, a.sentiment, a.target_version, a.confidence, a.summary
+    `SELECT i.*, a.sentiment, a.target_version, a.confidence, a.severity, a.impact_scope, a.functionality,
+            a.affected_user_share, a.duplicate_cluster_size, a.workaround_status, a.is_ai_generated, a.summary
      FROM issues i LEFT JOIN issue_analyses a ON a.issue_id = i.id
-     WHERE i.project_id = ? ORDER BY i.created_at DESC`,
+     WHERE i.project_id = ? AND COALESCE(a.is_ai_generated, 0) = 0
+     ORDER BY i.created_at DESC`,
   )
     .bind(projectId)
     .all<IssueWithAnalysis>();

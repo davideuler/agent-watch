@@ -12,10 +12,15 @@ interface Stability {
   score: number;
   color: string;
   state: 'analyzing' | 'rated';
+  grade: string;
   breakdown: {
     issueCount: number;
     negativeCount: number;
     positiveCount: number;
+    coreIssueCount: number;
+    nicheIssueCount: number;
+    workaroundCount: number;
+    topRiskFactor: string;
     ratingAvg: number | null;
     ratingCount: number;
   };
@@ -51,6 +56,12 @@ interface IssueItem {
   created_at: string;
   sentiment: string | null;
   confidence: number | null;
+  severity: string | null;
+  impact_scope: string | null;
+  functionality: string | null;
+  affected_user_share: string | null;
+  duplicate_cluster_size: number | null;
+  workaround_status: string | null;
   summary: string | null;
 }
 
@@ -194,11 +205,11 @@ function timeAgo(iso: string): string {
 }
 
 function capabilityRank(score: number): string {
-  if (score >= 8.6) return 'Omega';
-  if (score >= 7) return 'Apex';
-  if (score >= 5.5) return 'Field-ready';
-  if (score >= 4) return 'Volatile';
-  return 'Power drain';
+  if (score >= 8.2) return 'Stable';
+  if (score >= 6.8) return 'Mostly stable';
+  if (score >= 5.2) return 'Mixed';
+  if (score >= 3.5) return 'Risky';
+  return 'Unstable';
 }
 
 function escapeHtml(s: string): string {
@@ -214,14 +225,14 @@ function renderProjectStats(data: ProjectDetail) {
   const avgScore = tracked
     ? versions.reduce((sum, version) => sum + version.stability.score, 0) / tracked
     : 0;
-  const stable = versions.filter((version) => version.stability.score >= 6).length;
+  const stable = versions.filter((version) => version.stability.score >= 6.8).length;
   const issues = versions.reduce((sum, version) => sum + version.stability.breakdown.issueCount, 0);
   const negative = versions.reduce((sum, version) => sum + version.stability.breakdown.negativeCount, 0);
   const ratings = versions.reduce((sum, version) => sum + version.stability.breakdown.ratingCount, 0);
 
   const statItems: Array<[string, string, string?]> = [
-    ['Average score', tracked ? avgScore.toFixed(1) : '--', 'score'],
-    ['Stable releases', `${stable}/${tracked}`],
+    ['Average grade', tracked ? avgScore.toFixed(1) : '--', 'score'],
+    ['Mostly stable+', `${stable}/${tracked}`],
     ['Issue signals', String(issues), 'issues'],
     ['Negative signals', String(negative), 'negative'],
     ['Community ratings', String(ratings)],
@@ -377,16 +388,18 @@ function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
   node.style.setProperty('--score-color', v.stability.color);
   scoreEl.style.setProperty('--score-color', v.stability.color);
   scoreEl.style.color = v.stability.color;
-  $('.vc-rank', node)!.textContent = capabilityRank(v.stability.score);
+  $('.vc-rank', node)!.textContent = v.stability.grade ?? capabilityRank(v.stability.score);
 
   const stateEl = $('.vc-state', node)!;
   stateEl.textContent =
     v.stability.state === 'analyzing'
-      ? 'Scanning signal'
-      : capabilityRank(v.stability.score);
+      ? 'Collecting signal'
+      : '10 most stable · 0 least stable';
 
   $('[data-signal-issues]', node)!.textContent = String(v.stability.breakdown.issueCount);
-  $('[data-signal-negative]', node)!.textContent = String(v.stability.breakdown.negativeCount);
+  $('[data-signal-core]', node)!.textContent = String(v.stability.breakdown.coreIssueCount ?? 0);
+  $('[data-signal-niche]', node)!.textContent = String(v.stability.breakdown.nicheIssueCount ?? 0);
+  $('[data-signal-workarounds]', node)!.textContent = String(v.stability.breakdown.workaroundCount ?? 0);
   $('[data-signal-ratings]', node)!.textContent = String(v.stability.breakdown.ratingCount);
 
   const fill = $<HTMLElement>('.vc-bar-fill', node)!;
@@ -396,6 +409,7 @@ function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
   const metaParts = [
     `Released ${formatDate(v.published_at)} · ${timeAgo(v.published_at)}`,
     v.is_prerelease ? 'pre-release' : null,
+    v.stability.breakdown.topRiskFactor,
     v.stability.breakdown.positiveCount > 0 ? `${v.stability.breakdown.positiveCount} positive` : null,
   ].filter(Boolean);
   $('.vc-meta', node)!.textContent = metaParts.join(' · ');
@@ -473,12 +487,221 @@ async function loadDetail(v: VersionItem, slug: string, root: HTMLElement) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Issue list filters
+
+type FacetField =
+  | 'sentiment'
+  | 'severity'
+  | 'functionality'
+  | 'impact_scope'
+  | 'affected_user_share'
+  | 'workaround_status';
+
+interface FacetDef {
+  id: string;
+  label: string;
+  field: FacetField;
+  values: string[];
+}
+
+const FACET_DEFS: FacetDef[] = [
+  { id: 'sentiment', label: 'Sentiment', field: 'sentiment', values: ['negative', 'positive', 'neutral'] },
+  { id: 'severity', label: 'Severity', field: 'severity', values: ['critical', 'high', 'medium', 'low'] },
+  { id: 'area', label: 'Area', field: 'functionality', values: ['core', 'integration', 'provider', 'docs', 'unknown'] },
+  { id: 'scope', label: 'Scope', field: 'impact_scope', values: ['broad', 'moderate', 'niche'] },
+  { id: 'users', label: 'Users', field: 'affected_user_share', values: ['many', 'some', 'few', 'unknown'] },
+  { id: 'workaround', label: 'Workaround', field: 'workaround_status', values: ['none', 'partial', 'confirmed', 'unknown'] },
+];
+
+const CONFIDENCE_BUCKETS: Array<{ id: string; label: string; min: number }> = [
+  { id: 'all', label: 'Any', min: 0 },
+  { id: 'q30', label: '≥30%', min: 0.3 },
+  { id: 'q50', label: '≥50%', min: 0.5 },
+  { id: 'q70', label: '≥70%', min: 0.7 },
+  { id: 'q90', label: '≥90%', min: 0.9 },
+];
+
+interface IssueFilterState {
+  facets: Record<string, Set<string>>;
+  confidenceMin: number;
+}
+
+function makeEmptyFilters(): IssueFilterState {
+  const facets: Record<string, Set<string>> = {};
+  for (const f of FACET_DEFS) facets[f.id] = new Set();
+  return { facets, confidenceMin: 0 };
+}
+
+let currentIssueFilters: IssueFilterState = makeEmptyFilters();
+let currentIssueData: IssueItem[] = [];
+
+function getFacetFieldValue(item: IssueItem, field: FacetField): string {
+  const v = item[field];
+  return v == null ? 'unknown' : String(v);
+}
+
+function applyFilters(items: IssueItem[], filters: IssueFilterState): IssueItem[] {
+  return items.filter((item) => {
+    for (const f of FACET_DEFS) {
+      const selected = filters.facets[f.id];
+      if (!selected || selected.size === 0) continue;
+      const v = getFacetFieldValue(item, f.field);
+      if (!selected.has(v)) return false;
+    }
+    if (filters.confidenceMin > 0 && (item.confidence ?? 0) < filters.confidenceMin) return false;
+    return true;
+  });
+}
+
+function activeFilterCount(filters: IssueFilterState): number {
+  let n = 0;
+  for (const f of FACET_DEFS) n += filters.facets[f.id]?.size ?? 0;
+  if (filters.confidenceMin > 0) n += 1;
+  return n;
+}
+
+function renderIssueFilters(items: IssueItem[]): void {
+  const bar = document.getElementById('issues-filter-bar');
+  const row = document.getElementById('filter-row');
+  const summary = document.getElementById('filter-summary');
+  const clearBtn = document.getElementById('filter-clear') as HTMLButtonElement | null;
+  if (!bar || !row || !summary || !clearBtn) return;
+
+  if (items.length === 0) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+
+  const counts: Record<string, Record<string, number>> = {};
+  for (const f of FACET_DEFS) {
+    counts[f.id] = Object.fromEntries(f.values.map((v) => [v, 0]));
+  }
+  for (const item of items) {
+    for (const f of FACET_DEFS) {
+      const v = getFacetFieldValue(item, f.field);
+      const map = counts[f.id]!;
+      if (v in map) map[v] = (map[v] ?? 0) + 1;
+    }
+  }
+
+  row.innerHTML = '';
+  for (const f of FACET_DEFS) {
+    const group = document.createElement('div');
+    group.className = 'filter-group';
+    group.innerHTML = `<span class="filter-group-label">${f.label}</span>`;
+    const chips = document.createElement('div');
+    chips.className = 'filter-chips';
+    for (const v of f.values) {
+      const count = counts[f.id]?.[v] ?? 0;
+      const active = currentIssueFilters.facets[f.id]?.has(v) ?? false;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `filter-chip${active ? ' active' : ''}${count === 0 ? ' empty' : ''}`;
+      btn.dataset.facet = f.id;
+      btn.dataset.value = v;
+      btn.disabled = count === 0 && !active;
+      btn.innerHTML = `<span class="filter-chip-value">${escapeHtml(v)}</span><span class="filter-chip-count">${count}</span>`;
+      btn.addEventListener('click', () => toggleFacet(f.id, v));
+      chips.appendChild(btn);
+    }
+    group.appendChild(chips);
+    row.appendChild(group);
+  }
+
+  const confGroup = document.createElement('div');
+  confGroup.className = 'filter-group';
+  confGroup.innerHTML = `<span class="filter-group-label">Confidence</span>`;
+  const confChips = document.createElement('div');
+  confChips.className = 'filter-chips';
+  for (const bucket of CONFIDENCE_BUCKETS) {
+    const active = Math.abs(currentIssueFilters.confidenceMin - bucket.min) < 1e-9;
+    const matching = items.filter((it) => (it.confidence ?? 0) >= bucket.min).length;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `filter-chip${active ? ' active' : ''}`;
+    btn.disabled = matching === 0 && bucket.min > 0;
+    btn.innerHTML = `<span class="filter-chip-value">${bucket.label}</span><span class="filter-chip-count">${matching}</span>`;
+    btn.addEventListener('click', () => setConfidenceMin(bucket.min));
+    confChips.appendChild(btn);
+  }
+  confGroup.appendChild(confChips);
+  row.appendChild(confGroup);
+
+  const filtered = applyFilters(items, currentIssueFilters);
+  const active = activeFilterCount(currentIssueFilters);
+  summary.textContent = active === 0
+    ? `Showing all ${items.length} issue${items.length === 1 ? '' : 's'}`
+    : `Showing ${filtered.length} of ${items.length} issues · ${active} filter${active === 1 ? '' : 's'} active`;
+  clearBtn.hidden = active === 0;
+  clearBtn.onclick = () => {
+    currentIssueFilters = makeEmptyFilters();
+    rerenderFilteredIssues();
+  };
+}
+
+function toggleFacet(facetId: string, value: string): void {
+  const set = currentIssueFilters.facets[facetId];
+  if (!set) return;
+  if (set.has(value)) set.delete(value);
+  else set.add(value);
+  rerenderFilteredIssues();
+}
+
+function setConfidenceMin(min: number): void {
+  currentIssueFilters.confidenceMin = min;
+  rerenderFilteredIssues();
+}
+
+function rerenderFilteredIssues(): void {
+  const list = document.getElementById('issues-page-list');
+  if (!list) return;
+  renderIssueFilters(currentIssueData);
+  const filtered = applyFilters(currentIssueData, currentIssueFilters);
+  if (filtered.length === 0) {
+    list.innerHTML = '<li class="empty">No issues match the current filters.</li>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const i of filtered) list.appendChild(renderIssueLi(i, 'full'));
+}
+
+// ---------------------------------------------------------------------------
+
+function chip(label: string, value: string | null | undefined, kind: string): string {
+  if (!value) return '';
+  return `<span class="chip chip-${kind} chip-${kind}-${value}"><span class="chip-label">${escapeHtml(label)}</span><span class="chip-value">${escapeHtml(value)}</span></span>`;
+}
+
+function buildAnalysisChips(i: IssueItem): string {
+  const parts: string[] = [];
+  if (i.sentiment) parts.push(chip('sentiment', i.sentiment, 'sent'));
+  if (i.severity) parts.push(chip('severity', i.severity, 'sev'));
+  if (i.functionality && i.functionality !== 'unknown') parts.push(chip('area', i.functionality, 'fn'));
+  if (i.impact_scope) parts.push(chip('scope', i.impact_scope, 'scope'));
+  if (i.affected_user_share && i.affected_user_share !== 'unknown') {
+    parts.push(chip('users', i.affected_user_share, 'share'));
+  }
+  if (i.workaround_status && i.workaround_status !== 'unknown' && i.workaround_status !== 'none') {
+    parts.push(chip('workaround', i.workaround_status, 'wa'));
+  }
+  if (i.duplicate_cluster_size && i.duplicate_cluster_size > 1) {
+    parts.push(`<span class="chip chip-dupe"><span class="chip-label">duplicates</span><span class="chip-value">×${i.duplicate_cluster_size}</span></span>`);
+  }
+  if (typeof i.confidence === 'number' && i.confidence > 0) {
+    parts.push(`<span class="chip chip-conf"><span class="chip-label">confidence</span><span class="chip-value">${Math.round(i.confidence * 100)}%</span></span>`);
+  }
+  return parts.join('');
+}
+
 function renderIssueLi(i: IssueItem, mode: 'compact' | 'full'): HTMLElement {
   const li = document.createElement('li');
   li.classList.add(`sentiment-${i.sentiment ?? 'unknown'}`);
-  const sentimentIcon = i.sentiment === 'negative' ? '⚠' : i.sentiment === 'positive' ? '✓' : '·';
+  const sentimentIcon = i.sentiment === 'negative' ? '!' : i.sentiment === 'positive' ? '+' : '·';
   if (mode === 'full') {
     const summary = i.summary ? `<div class="issue-summary muted">${escapeHtml(i.summary)}</div>` : '';
+    const chips = buildAnalysisChips(i);
     const meta = [
       `${i.comment_count} comment${i.comment_count === 1 ? '' : 's'}`,
       i.user_login ? `by ${escapeHtml(i.user_login)}` : null,
@@ -486,6 +709,7 @@ function renderIssueLi(i: IssueItem, mode: 'compact' | 'full'): HTMLElement {
     ]
       .filter(Boolean)
       .join(' · ');
+    const chipsHtml = chips ? `<div class="issue-chips">${chips}</div>` : '';
     li.innerHTML = `
       <div class="issue-row-top">
         <span class="issue-num">#${i.number}</span>
@@ -493,12 +717,19 @@ function renderIssueLi(i: IssueItem, mode: 'compact' | 'full'): HTMLElement {
         <span class="issue-state">${sentimentIcon} ${escapeHtml(i.state)}</span>
       </div>
       <div class="issue-row-meta muted">${meta}</div>
+      ${chipsHtml}
       ${summary}`;
   } else {
+    const compactHints = [
+      i.severity,
+      i.functionality && i.functionality !== 'unknown' ? i.functionality : null,
+      i.impact_scope,
+    ].filter(Boolean);
+    const compactTitle = [i.summary, ...compactHints].filter(Boolean).join(' · ');
     li.innerHTML = `
       <span class="issue-num">#${i.number}</span>
       <span class="issue-title"><a href="${i.html_url}" target="_blank" rel="noreferrer">${escapeHtml(i.title)}</a></span>
-      <span class="issue-state" title="${escapeHtml(i.summary ?? '')}">${sentimentIcon} ${escapeHtml(i.state)}</span>`;
+      <span class="issue-state" title="${escapeHtml(compactTitle)}">${sentimentIcon} ${escapeHtml(i.state)}</span>`;
   }
   return li;
 }
@@ -614,10 +845,15 @@ async function renderIssuesPage(slug: string, tag: string): Promise<void> {
 
   if (data.issues.length === 0) {
     list.innerHTML = '<li class="empty">No issues linked to this release yet.</li>';
+    const bar = document.getElementById('issues-filter-bar');
+    if (bar) bar.hidden = true;
+    currentIssueData = [];
+    currentIssueFilters = makeEmptyFilters();
     return;
   }
-  list.innerHTML = '';
-  for (const i of data.issues) list.appendChild(renderIssueLi(i, 'full'));
+  currentIssueData = data.issues;
+  currentIssueFilters = makeEmptyFilters();
+  rerenderFilteredIssues();
 }
 
 async function rerenderActiveRoute(): Promise<void> {

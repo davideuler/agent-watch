@@ -707,7 +707,7 @@ a:hover {
 
 .vc-signal-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.45rem;
 }
 .vc-signal {
@@ -721,9 +721,17 @@ a:hover {
   background: linear-gradient(180deg, rgba(211, 234, 247, 0.92), rgba(255, 255, 255, 0.96));
   border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
 }
-.vc-signal-negative {
+.vc-signal-core {
   background: linear-gradient(180deg, rgba(254, 226, 226, 0.94), rgba(255, 255, 255, 0.96));
   border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+.vc-signal-niche {
+  background: linear-gradient(180deg, rgba(238, 242, 255, 0.94), rgba(255, 255, 255, 0.96));
+  border-color: color-mix(in srgb, var(--neutral) 50%, var(--border));
+}
+.vc-signal-workarounds {
+  background: linear-gradient(180deg, rgba(220, 252, 231, 0.9), rgba(255, 255, 255, 0.96));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--border));
 }
 .vc-signal-value {
   display: block;
@@ -735,7 +743,9 @@ a:hover {
   color: var(--text);
 }
 .vc-signal-issues .vc-signal-value { color: var(--accent); }
-.vc-signal-negative .vc-signal-value { color: var(--danger); }
+.vc-signal-core .vc-signal-value { color: var(--danger); }
+.vc-signal-niche .vc-signal-value { color: var(--neutral); }
+.vc-signal-workarounds .vc-signal-value { color: var(--good); }
 .vc-signal-label {
   display: block;
   margin-top: 0.22rem;
@@ -995,6 +1005,7 @@ a:hover {
   .legend-spacer { display: none; }
   .vc-score { font-size: 2.6rem; }
   .vc-tag-block .vc-tag { font-size: 1.28rem; }
+  .vc-signal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stat-rail { grid-template-columns: repeat(2, 1fr); }
 }
 
@@ -1357,6 +1368,176 @@ a:hover {
   border-radius: 3px;
   margin-top: 0.15rem;
 }
+.issue-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.1rem;
+}
+.issues-filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.65rem 0.85rem;
+  margin-bottom: 0.65rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.1rem;
+  align-items: flex-start;
+}
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.filter-group-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  font-weight: 600;
+}
+.filter-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.filter-chip.active {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
+  border-color: var(--accent);
+  color: var(--text);
+}
+.filter-chip.empty,
+.filter-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.filter-chip-count {
+  display: inline-flex;
+  min-width: 1.4em;
+  justify-content: center;
+  padding: 0 0.25rem;
+  background: color-mix(in srgb, var(--text-mute) 18%, transparent);
+  color: var(--text-dim);
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.6rem;
+}
+.filter-chip.active .filter-chip-count {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--text);
+}
+.filter-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+.filter-clear {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.filter-clear:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.chip {
+  display: inline-flex;
+  align-items: stretch;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  line-height: 1;
+}
+.chip-label {
+  padding: 0.25rem 0.4rem;
+  color: var(--text-mute);
+  background: transparent;
+  border-right: 1px solid var(--border);
+  font-weight: 500;
+}
+.chip-value {
+  padding: 0.25rem 0.45rem;
+  color: var(--text-dim);
+  font-weight: 700;
+  background: var(--bg-elev);
+}
+/* sentiment */
+.chip-sent-negative .chip-value { color: var(--danger); }
+.chip-sent-positive .chip-value { color: var(--good); }
+.chip-sent-neutral  .chip-value { color: var(--text-mute); }
+/* severity */
+.chip-sev-critical { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+.chip-sev-critical .chip-value { color: var(--danger); }
+.chip-sev-high { border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
+.chip-sev-high .chip-value { color: color-mix(in srgb, var(--danger) 80%, var(--text)); }
+.chip-sev-medium .chip-value { color: var(--neutral); }
+.chip-sev-low .chip-value { color: var(--text-mute); }
+/* functionality */
+.chip-fn-core { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.chip-fn-core .chip-value { color: var(--accent); }
+.chip-fn-integration .chip-value { color: var(--text-dim); }
+.chip-fn-provider .chip-value { color: var(--text-dim); }
+.chip-fn-docs .chip-value { color: var(--text-mute); }
+/* impact scope */
+.chip-scope-broad { border-color: color-mix(in srgb, var(--danger) 25%, var(--border)); }
+.chip-scope-broad .chip-value { color: color-mix(in srgb, var(--danger) 70%, var(--text)); }
+.chip-scope-moderate .chip-value { color: var(--text-dim); }
+.chip-scope-niche .chip-value { color: var(--text-mute); }
+/* affected user share */
+.chip-share-many .chip-value { color: color-mix(in srgb, var(--danger) 60%, var(--text)); }
+.chip-share-some .chip-value { color: var(--text-dim); }
+.chip-share-few  .chip-value { color: var(--text-mute); }
+/* workaround */
+.chip-wa-confirmed { border-color: color-mix(in srgb, var(--good) 35%, var(--border)); }
+.chip-wa-confirmed .chip-value { color: var(--good); }
+.chip-wa-partial .chip-value { color: var(--neutral); }
+/* duplicate cluster + confidence */
+.chip-dupe .chip-value { color: var(--neutral); }
+.chip-conf .chip-value { color: var(--text-dim); }
 
 @media (max-width: 640px) {
   .hero { padding: 0.75rem 0.85rem; }

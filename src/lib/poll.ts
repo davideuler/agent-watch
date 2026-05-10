@@ -95,12 +95,19 @@ export async function pollOnce(env: Env): Promise<{ project: string; releases: n
 
           if (env.LLM_API_KEY) {
             try {
-              const result = await analyzeIssue(env, issue, comments, tagNames);
+              const result = await analyzeIssue(env, issue, comments, tagNames, p.slug);
               await setAnalysis(env, {
                 issue_id: issueId,
                 sentiment: result.sentiment,
                 target_version: result.targetVersion,
                 confidence: result.confidence,
+                severity: result.severity,
+                impact_scope: result.impactScope,
+                functionality: result.functionality,
+                affected_user_share: result.affectedUserShare,
+                duplicate_cluster_size: result.duplicateClusterSize,
+                workaround_status: result.workaroundStatus,
+                is_ai_generated: result.isAiGenerated ? 1 : 0,
                 summary: result.summary,
                 raw_response: result.raw.slice(0, 4000),
               });

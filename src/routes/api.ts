@@ -89,13 +89,25 @@ api.get('/projects/:slug', async (c) => {
   // instead of wall-clock now — so unchanged inputs produce a stable score.
   const LIVE_VERSION_COUNT = 3;
 
-  const versionsWithScore = versions.map((v, idx) => {
+  type ScoreInputs = {
+    v: (typeof versions)[number];
+    versionIssues: AnalyzedIssue[];
+    ratings: { score: number }[];
+    scoreNow: Date | undefined;
+  };
+  const inputs: ScoreInputs[] = versions.map((v, idx) => {
     const relatedIssues = issues.filter((i) => i.target_version === v.tag_name && i.sentiment);
     const versionIssues: AnalyzedIssue[] = relatedIssues.map((i) => ({
       sentiment: (i.sentiment as 'positive' | 'negative' | 'neutral') ?? 'neutral',
       confidence: i.confidence ?? 0,
       comment_count: i.comment_count,
       created_at: i.created_at,
+      severity: (i.severity as AnalyzedIssue['severity']) ?? 'medium',
+      impact_scope: (i.impact_scope as AnalyzedIssue['impact_scope']) ?? 'moderate',
+      functionality: (i.functionality as AnalyzedIssue['functionality']) ?? 'unknown',
+      affected_user_share: (i.affected_user_share as AnalyzedIssue['affected_user_share']) ?? 'unknown',
+      duplicate_cluster_size: i.duplicate_cluster_size ?? 1,
+      workaround_status: (i.workaround_status as AnalyzedIssue['workaround_status']) ?? 'unknown',
     }));
     const versionRatings = ratingsByVersion.get(v.id) ?? [];
 
@@ -113,12 +125,42 @@ api.get('/projects/:slug', async (c) => {
       scoreNow = new Date(freezeMs);
     }
 
+    return {
+      v,
+      versionIssues,
+      ratings: versionRatings.map((r) => ({ score: r.score })),
+      scoreNow,
+    };
+  });
+
+  // Pass 1: compute each version's weightedNegSum without peer context, so we can
+  // build a project-level peer median to compare each version against.
+  const pass1 = inputs.map((inp) =>
+    calculateStability({ publishedAt: inp.v.published_at }, inp.versionIssues, inp.ratings, inp.scoreNow),
+  );
+  const matureNegSums = pass1
+    .filter((s) => s.state === 'rated' && s.breakdown.negativeCount > 0)
+    .map((s) => s.breakdown.weightedNegSum)
+    .sort((a, b) => a - b);
+  let peerContext: { medianWeightedNeg: number } | undefined;
+  if (matureNegSums.length >= 3) {
+    const mid = Math.floor(matureNegSums.length / 2);
+    const a = matureNegSums[mid] ?? 0;
+    const b = matureNegSums[mid - 1] ?? a;
+    const median = matureNegSums.length % 2 === 0 ? (a + b) / 2 : a;
+    peerContext = { medianWeightedNeg: median };
+  }
+
+  const versionsWithScore = inputs.map((inp) => {
+    const v = inp.v;
     const stability = calculateStability(
       { publishedAt: v.published_at },
-      versionIssues,
-      versionRatings.map((r) => ({ score: r.score })),
-      scoreNow,
+      inp.versionIssues,
+      inp.ratings,
+      inp.scoreNow,
+      peerContext,
     );
+    const versionIssues = inp.versionIssues;
     return {
       id: v.id,
       tag_name: v.tag_name,
@@ -178,6 +220,12 @@ async function buildVersionIssuesPayload(c: any, version: VersionRow, limit: num
       created_at: i.created_at,
       sentiment: i.sentiment,
       confidence: i.confidence,
+      severity: i.severity,
+      impact_scope: i.impact_scope,
+      functionality: i.functionality,
+      affected_user_share: i.affected_user_share,
+      duplicate_cluster_size: i.duplicate_cluster_size,
+      workaround_status: i.workaround_status,
       summary: i.summary,
     }));
   const totalRelated = issues.filter((i) => i.target_version === version.tag_name).length;

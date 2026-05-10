@@ -1,6 +1,6 @@
 # Agent Watch
 
-Track release stability for [OpenClaw](https://github.com/openclaw/openclaw), [Hermes](https://github.com/getzep/hermes), and any other open-source project. Built on Cloudflare Workers + D1.
+Track release stability for [OpenClaw](https://github.com/openclaw/openclaw), [Hermes](https://github.com/NousResearch/hermes-agent), and any other open-source project. Built on Cloudflare Workers + D1.
 
 **Live:** https://agentwatch.aicompass.dev
 
@@ -8,18 +8,21 @@ Track release stability for [OpenClaw](https://github.com/openclaw/openclaw), [H
 
 ## How it works
 
-1. **Hourly cron** pulls the 15 most-recent releases from GitHub for each configured project, plus issues updated since the last poll.
-2. **LLM (OpenAI-compatible)** classifies each issue's sentiment (`positive` / `negative` / `neutral`), guesses which version tag the report targets, and gives a confidence score.
-3. **Stability score (0–10)** per version blends:
-   - Base 5
-   - LLM-classified issues (negative → subtract, positive → add) weighted by confidence × comment-volume × recency-decay
-   - User star ratings (1–10) — community ratings are blended with up to 60% weight at saturation
+1. **Cron every 20 minutes** pulls the 15 most-recent releases from GitHub for each configured project, plus issues updated since the last poll.
+2. **LLM (OpenAI-compatible)** classifies each issue with project-aware rules. The system prompt embeds an explicit core-vs-niche rubric per project (openclaw, hermes-agent), so a provider/channel/backend-specific bug is correctly tagged as `niche` instead of inflated to `core+broad+critical`. Output fields: sentiment, target release, severity, impact scope, functionality, affected user share, duplicate cluster size, workaround status, and a one-line summary.
+3. **Stability score (0 = unstable → 10 = stable)** per version blends:
+   - Impact-weighted issue risk, with **per-issue cap** so one over-tagged report can't tank the score and a **niche-total cap (1.0)** so any number of niche/integration/provider issues contribute at most 1.0 to the risk index
+   - **Core-blocker floor (6.0)**: if the release has zero `core+critical|high` negatives, the score never drops below "Mostly stable" — vocal but bounded niche failures don't make working software look broken
+   - **Peer-median floor (5.5)**: a release whose weighted negative signal is at-or-below the project's own historical median is held to "Mixed" or better
+   - **Stronger positive signal**: positive issues / "works for me" comments offset roughly 2× more than before
+   - User star ratings (1–10) blend in with up to 60% weight at saturation
 4. **New versions** (< 3 hours old) display a grey **5** with `analyzing…`.
 5. **Color coding** is interpolated:
-   - `< 5` shades of red, deeper for lower scores
-   - `= 5` grey
-   - `> 5` shades of green, deeper for higher scores
-6. **Login** with GitHub or Google to add your own 1–10 rating with optional comment.
+   - Lower scores shade red because they indicate higher observed release risk
+   - `= 5` grey means neutral or insufficient signal
+   - Higher scores shade green because they indicate lower observed release risk
+6. **Confidence label** (`low`/`medium`/`high`) reflects how many independent signals (negatives + positives + ratings) backed the score, so a low score from a single report is visibly distinct from a low score from many corroborating ones.
+7. **Login** with GitHub or Google to add your own 1–10 rating with optional comment.
 
 ---
 
@@ -53,7 +56,7 @@ All config is via environment variables — see `.env.example` for the full list
 
 | Variable | Purpose | Example |
 | --- | --- | --- |
-| `PROJECTS` | Comma-separated `slug=owner/repo` for projects to monitor | `openclaw=openclaw/openclaw,hermes=getzep/hermes` |
+| `PROJECTS` | Comma-separated `slug=owner/repo` for projects to monitor | `openclaw=openclaw/openclaw,hermes=nousresearch/hermes-agent` |
 | `DEFAULT_PROJECT` | Slug shown on the homepage by default | `openclaw` |
 | `PUBLIC_BASE_URL` | Origin used for OAuth `redirect_uri` | `https://agentwatch.aicompass.dev` |
 | `GITHUB_TOKEN` | Bumps GitHub API rate-limit from 60 → 5000/hour | `ghp_…` |

@@ -72,6 +72,13 @@ export interface IssueAnalysisRow {
   sentiment: 'positive' | 'negative' | 'neutral';
   target_version: string | null;
   confidence: number;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  impact_scope: 'broad' | 'moderate' | 'niche';
+  functionality: 'core' | 'integration' | 'provider' | 'docs' | 'unknown';
+  affected_user_share: 'many' | 'some' | 'few' | 'unknown';
+  duplicate_cluster_size: number;
+  workaround_status: 'none' | 'partial' | 'confirmed' | 'unknown';
+  is_ai_generated: number;
   summary: string | null;
   raw_response: string | null;
   analyzed_at: string;

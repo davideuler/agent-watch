@@ -55,28 +55,28 @@
 
         <details class="scoring-info score-legend">
           <summary class="legend score-legend-summary">
-            <span class="legend-item"><span class="dot dot-critical"></span><span>POWER DRAIN</span><span class="legend-range">&lt; 4</span></span>
-            <span class="legend-item"><span class="dot dot-volatile"></span><span>VOLATILE</span><span class="legend-range">4–5.4</span></span>
-            <span class="legend-item"><span class="dot dot-neutral"></span><span>FIELD-READY</span><span class="legend-range">5.5–6.9</span></span>
-            <span class="legend-item"><span class="dot dot-apex"></span><span>APEX</span><span class="legend-range">7–8.5</span></span>
-            <span class="legend-item"><span class="dot dot-prime"></span><span>OMEGA</span><span class="legend-range">8.6–10</span></span>
+            <span class="legend-item"><span class="dot dot-critical"></span><span>UNSTABLE</span><span class="legend-range">0–3.4 · 0 is worst</span></span>
+            <span class="legend-item"><span class="dot dot-volatile"></span><span>RISKY</span><span class="legend-range">3.5–5.1</span></span>
+            <span class="legend-item"><span class="dot dot-neutral"></span><span>MIXED</span><span class="legend-range">5.2–6.7</span></span>
+            <span class="legend-item"><span class="dot dot-apex"></span><span>MOSTLY STABLE</span><span class="legend-range">6.8–8.1</span></span>
+            <span class="legend-item"><span class="dot dot-prime"></span><span>STABLE</span><span class="legend-range">8.2–10 · 10 is best</span></span>
             <span class="legend-spacer"></span>
             <span class="legend-pulse"><span class="legend-pulse-dot"></span><span>LIVE · cron every 20 min</span></span>
-            <span class="score-legend-expand"><span class="score-legend-icon" aria-hidden="true">?</span><span>Details</span><span class="scoring-info-hint" aria-hidden="true">▾</span></span>
+            <span class="score-legend-expand"><span class="score-legend-icon" aria-hidden="true">i</span><span>Method</span><span class="scoring-info-hint" aria-hidden="true">▾</span></span>
           </summary>
           <div class="scoring-info-body">
             <ul class="scoring-tiers">
-              <li><span class="tier-pill tier-omega">8.6 – 10</span> <strong>OMEGA</strong> — battle-tested · deploy with confidence</li>
-              <li><span class="tier-pill tier-apex">7.0 – 8.5</span> <strong>APEX</strong> — production-ready · low risk</li>
-              <li><span class="tier-pill tier-field">5.5 – 6.9</span> <strong>FIELD-READY</strong> — usable · keep an eye on issues</li>
-              <li><span class="tier-pill tier-volatile">4.0 – 5.4</span> <strong>VOLATILE</strong> — known issues · deploy with care</li>
-              <li><span class="tier-pill tier-drain">&lt; 4.0</span> <strong>POWER DRAIN</strong> — significant problems · avoid for production</li>
-              <li><span class="tier-pill tier-grey">5.0</span> <strong>FLUX FIELD</strong> — neutral hold · brand-new release, signal still accumulating (first 3 hours)</li>
+              <li><span class="tier-pill tier-omega">8.2 – 10</span> <strong>STABLE</strong> — low observed release risk; 10 is the most stable end</li>
+              <li><span class="tier-pill tier-apex">6.8 – 8.1</span> <strong>MOSTLY STABLE</strong> — real issues exist, but evidence points away from broad breakage</li>
+              <li><span class="tier-pill tier-field">5.2 – 6.7</span> <strong>MIXED</strong> — enough risk signal to check affected workflows before upgrading</li>
+              <li><span class="tier-pill tier-volatile">3.5 – 5.1</span> <strong>RISKY</strong> — core or broad failures are present in the issue stream</li>
+              <li><span class="tier-pill tier-drain">0 – 3.4</span> <strong>UNSTABLE</strong> — 0 is the least stable end; severe/broad/core signals dominate</li>
+              <li><span class="tier-pill tier-grey">5.0</span> <strong>COLLECTING SIGNAL</strong> — brand-new release, held neutral for the first 3 hours</li>
             </ul>
             <div class="scoring-formula">
-              <p><strong>Agent Watch</strong> tracks every <strong>OpenClaw</strong> and <strong>Hermes Agent</strong> release and scores it <strong>0–10</strong> for stability — built from real GitHub issues, LLM sentiment classification, and community ratings. Use the score to choose the safest version to deploy.</p>
-              <p><strong>Inputs.</strong> Each release pulls in its referenced GitHub issues. An LLM classifies every issue as <em>positive</em> / <em>negative</em> / <em>neutral</em> with a confidence score. Each negative signal is weighted by recency, comment activity, and confidence. User ratings (1–10) blend in once submitted.</p>
-              <p><strong>Formula.</strong> <code>score = 10 · exp(−5 · bug_rate)</code> &nbsp;where&nbsp; <code>bug_rate = effective_negative_weight / max(24h, age_in_hours)</code>. Brand-new releases sit at neutral 5 for the first 3 hours while signal accumulates. Once the next 3 versions ship, the score is <strong>frozen</strong> against the latest input change so unchanged data doesn't drift.</p>
+              <p><strong>Agent Watch</strong> grades <strong>OpenClaw</strong> and <strong>Hermes Agent</strong> releases on a <strong>0–10 real-world stability scale</strong>: <strong>10 means most stable, 0 means least stable</strong>.</p>
+              <p><strong>Inputs.</strong> Each GitHub issue is classified for sentiment, severity, impact scope, affected functionality, estimated affected user share, duplicate clustering, and workaround status. Core CLI/gateway/agent failures weigh more than niche adapter or provider-specific issues.</p>
+              <p><strong>Formula.</strong> The grade starts from impact-weighted issue risk, discounts confirmed workarounds and duplicate clusters, then blends in signed-in community ratings as real-environment evidence. Brand-new releases sit at neutral 5 for the first 3 hours while signal accumulates. Once the next 3 versions ship, unchanged older scores are frozen against the latest input change.</p>
               <p class="scoring-formula-foot">Updated every 20 minutes via cron — pulled from public GitHub data + LLM classification.</p>
             </div>
           </div>
@@ -100,6 +100,13 @@
             <h2 id="issues-count-label">Related issues</h2>
             <p class="muted" id="issues-cap-note"></p>
           </div>
+          <div class="issues-filter-bar" id="issues-filter-bar" hidden>
+            <div class="filter-row" id="filter-row"></div>
+            <div class="filter-meta">
+              <span class="muted" id="filter-summary"></span>
+              <button class="filter-clear" type="button" id="filter-clear" hidden>Clear filters</button>
+            </div>
+          </div>
           <ul class="issues-page-list" id="issues-page-list">
             <li class="muted">Loading issues…</li>
           </ul>
@@ -109,7 +116,7 @@
 
     <footer class="footer">
       <span class="footer-mark">◉</span>
-      <span>Stability scored from GitHub issues + LLM sentiment + community ratings.</span>
+      <span>Release stability graded from impact-scored GitHub issues and real user ratings.</span>
       <span class="footer-sep">·</span>
       <a class="footer-brand-link" href="https://aicompass.dev/" target="_blank" rel="noreferrer">AI Compass</a>
       <span class="footer-sep">·</span>
@@ -143,9 +150,17 @@
             <span class="vc-signal-value" data-signal-issues></span>
             <span class="vc-signal-label">Issues</span>
           </div>
-          <div class="vc-signal vc-signal-negative">
-            <span class="vc-signal-value" data-signal-negative></span>
-            <span class="vc-signal-label">Negative</span>
+          <div class="vc-signal vc-signal-core">
+            <span class="vc-signal-value" data-signal-core></span>
+            <span class="vc-signal-label">Core</span>
+          </div>
+          <div class="vc-signal vc-signal-niche">
+            <span class="vc-signal-value" data-signal-niche></span>
+            <span class="vc-signal-label">Niche</span>
+          </div>
+          <div class="vc-signal vc-signal-workarounds">
+            <span class="vc-signal-value" data-signal-workarounds></span>
+            <span class="vc-signal-label">Workarounds</span>
           </div>
           <div class="vc-signal">
             <span class="vc-signal-value" data-signal-ratings></span>

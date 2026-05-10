@@ -3,6 +3,12 @@ export interface AnalyzedIssue {
   confidence: number;
   comment_count: number;
   created_at: string;
+  severity?: IssueSeverity | null;
+  impact_scope?: ImpactScope | null;
+  functionality?: FunctionalityArea | null;
+  affected_user_share?: AffectedUserShare | null;
+  duplicate_cluster_size?: number | null;
+  workaround_status?: WorkaroundStatus | null;
 }
 
 export interface UserRatingInput {
@@ -13,32 +19,97 @@ export interface VersionForScore {
   publishedAt: string;
 }
 
+export interface PeerContext {
+  medianWeightedNeg: number;
+}
+
 export interface StabilityResult {
   score: number;
   color: string;
   state: 'analyzing' | 'rated';
+  grade: StabilityGrade;
   breakdown: {
     ageHours: number;
     weightedNegSum: number;
     weightedPosSum: number;
-    bugRate: number;
+    riskIndex: number;
     baseScore: number;
     blendedFromIssues: number;
     issueCount: number;
     negativeCount: number;
     positiveCount: number;
+    coreIssueCount: number;
+    coreSeriousCount: number;
+    nicheIssueCount: number;
+    workaroundCount: number;
+    nicheRawSum: number;
+    topRiskFactor: string;
     ratingAvg: number | null;
     ratingCount: number;
+    signalCount: number;
+    confidenceLevel: 'low' | 'medium' | 'high';
+    floorApplied: 'none' | 'core' | 'peer';
   };
 }
 
+export type IssueSeverity = 'critical' | 'high' | 'medium' | 'low';
+export type ImpactScope = 'broad' | 'moderate' | 'niche';
+export type FunctionalityArea = 'core' | 'integration' | 'provider' | 'docs' | 'unknown';
+export type AffectedUserShare = 'many' | 'some' | 'few' | 'unknown';
+export type WorkaroundStatus = 'none' | 'partial' | 'confirmed' | 'unknown';
+export type StabilityGrade =
+  | 'Stable'
+  | 'Mostly stable'
+  | 'Mixed'
+  | 'Risky'
+  | 'Unstable'
+  | 'Insufficient signal';
+
 const NEW_VERSION_GREY_HOURS = 3;
-const MIN_AGE_HOURS = 24;
-const DECAY_K = 5;
-const POS_OFFSET = 0.5;
+const POS_OFFSET = 0.7;
+const PER_ISSUE_CAP = 5;
+const OTHER_DROP_MAX = 2.0;
+const OTHER_DROP_TAU = 3.0;
+const PEER_MEDIAN_FLOOR = 5.5;
+const MIN_SCORE = 1.0;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const GREY = '#9ca3af';
+
+const SEVERITY_WEIGHT: Record<IssueSeverity, number> = {
+  critical: 2.8,
+  high: 1.9,
+  medium: 1.0,
+  low: 0.35,
+};
+
+const SCOPE_WEIGHT: Record<ImpactScope, number> = {
+  broad: 1.75,
+  moderate: 1.0,
+  niche: 0.3,
+};
+
+const FUNCTION_WEIGHT: Record<FunctionalityArea, number> = {
+  core: 1.65,
+  provider: 0.75,
+  integration: 0.45,
+  docs: 0.15,
+  unknown: 0.8,
+};
+
+const USER_SHARE_WEIGHT: Record<AffectedUserShare, number> = {
+  many: 1.45,
+  some: 0.9,
+  few: 0.35,
+  unknown: 0.75,
+};
+
+const WORKAROUND_WEIGHT: Record<WorkaroundStatus, number> = {
+  none: 1,
+  unknown: 0.85,
+  partial: 0.65,
+  confirmed: 0.35,
+};
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -59,12 +130,52 @@ function colorForScore(score: number): string {
   return rgbHex(180 - 140 * t, 200 + 30 * t, 180 - 140 * t);
 }
 
-function weightForIssue(issue: AnalyzedIssue, now: number): number {
+function issueRiskWeight(issue: AnalyzedIssue, now: number): number {
   const ageDays = Math.max(0, now - new Date(issue.created_at).getTime()) / DAY_MS;
-  const recency = Math.exp(-ageDays / 30);
-  const commentBoost = 1 + Math.min(2, Math.log10(1 + issue.comment_count) * 0.8);
+  const recency = 0.55 + 0.45 * Math.exp(-ageDays / 45);
+  const discussionBoost = 1 + Math.min(1.4, Math.log10(1 + issue.comment_count) * 0.45);
   const conf = Math.max(0.2, issue.confidence);
-  return recency * commentBoost * conf;
+  const duplicateClusterSize = clamp(issue.duplicate_cluster_size ?? 1, 1, 100);
+  const duplicateBoost = 1 + Math.log2(duplicateClusterSize) * 0.28;
+  return (
+    recency *
+    discussionBoost *
+    duplicateBoost *
+    conf *
+    SEVERITY_WEIGHT[issue.severity ?? 'medium'] *
+    SCOPE_WEIGHT[issue.impact_scope ?? 'moderate'] *
+    FUNCTION_WEIGHT[issue.functionality ?? 'unknown'] *
+    USER_SHARE_WEIGHT[issue.affected_user_share ?? 'unknown'] *
+    WORKAROUND_WEIGHT[issue.workaround_status ?? 'unknown']
+  );
+}
+
+function positiveEvidenceWeight(issue: AnalyzedIssue, now: number): number {
+  const ageDays = Math.max(0, now - new Date(issue.created_at).getTime()) / DAY_MS;
+  const recency = 0.65 + 0.35 * Math.exp(-ageDays / 45);
+  const discussionBoost = 1 + Math.min(0.8, Math.log10(1 + issue.comment_count) * 0.3);
+  return recency * discussionBoost * Math.max(0.2, issue.confidence);
+}
+
+function scoreFromRiskIndex(riskIndex: number): number {
+  return 10 / (1 + Math.pow(Math.max(0, riskIndex) / 4.2, 1.35));
+}
+
+function gradeForScore(score: number, issueCount: number): StabilityGrade {
+  if (issueCount === 0 && score === 5) return 'Insufficient signal';
+  if (score >= 8.2) return 'Stable';
+  if (score >= 6.8) return 'Mostly stable';
+  if (score >= 5.2) return 'Mixed';
+  if (score >= 3.5) return 'Risky';
+  return 'Unstable';
+}
+
+function topRiskFactor(coreSeriousCount: number, nicheIssueCount: number, workaroundCount: number, negativeCount: number): string {
+  if (negativeCount === 0) return 'No negative release-linked issues';
+  if (coreSeriousCount > 0) return `${coreSeriousCount} core-blocking signal${coreSeriousCount === 1 ? '' : 's'}`;
+  if (nicheIssueCount > 0) return `${nicheIssueCount} niche/integration signal${nicheIssueCount === 1 ? '' : 's'} (capped)`;
+  if (workaroundCount > 0) return `${workaroundCount} issue${workaroundCount === 1 ? '' : 's'} with confirmed workarounds`;
+  return `${negativeCount} negative signal${negativeCount === 1 ? '' : 's'}`;
 }
 
 export function calculateStability(
@@ -72,6 +183,7 @@ export function calculateStability(
   issues: AnalyzedIssue[],
   ratings: UserRatingInput[],
   now: Date = new Date(),
+  peerContext?: PeerContext,
 ): StabilityResult {
   const nowMs = now.getTime();
   const ageMs = nowMs - new Date(version.publishedAt).getTime();
@@ -86,37 +198,79 @@ export function calculateStability(
         ageHours: Math.round(ageHours * 10) / 10,
         weightedNegSum: 0,
         weightedPosSum: 0,
-        bugRate: 0,
+        riskIndex: 0,
         baseScore: 5,
         blendedFromIssues: 5,
         issueCount: 0,
         negativeCount: 0,
         positiveCount: 0,
+        coreIssueCount: 0,
+        coreSeriousCount: 0,
+        nicheIssueCount: 0,
+        workaroundCount: 0,
+        nicheRawSum: 0,
+        topRiskFactor: 'Still collecting issue signal',
         ratingAvg: null,
         ratingCount: 0,
+        signalCount: 0,
+        confidenceLevel: 'low',
+        floorApplied: 'none',
       },
+      grade: 'Insufficient signal',
     };
   }
 
-  let weightedNeg = 0;
+  let weightedNegCoreSerious = 0;
+  let weightedNegOther = 0;
+  let weightedNegNicheRaw = 0;
   let weightedPos = 0;
   let neg = 0;
   let pos = 0;
+  let coreIssueCount = 0;
+  let coreSeriousCount = 0;
+  let nicheIssueCount = 0;
+  let workaroundCount = 0;
   for (const issue of issues) {
-    const w = weightForIssue(issue, nowMs);
     if (issue.sentiment === 'negative') {
-      weightedNeg += w;
+      const raw = issueRiskWeight(issue, nowMs);
+      const w = Math.min(raw, PER_ISSUE_CAP);
+      const scope = issue.impact_scope ?? 'moderate';
+      const fn = issue.functionality ?? 'unknown';
+      const sev = issue.severity ?? 'medium';
+      const isCoreSerious = fn === 'core' && (sev === 'critical' || sev === 'high');
+      if (isCoreSerious) {
+        weightedNegCoreSerious += w;
+        coreSeriousCount++;
+      } else {
+        weightedNegOther += w;
+      }
+      if (fn === 'core') coreIssueCount++;
+      if (scope === 'niche') {
+        weightedNegNicheRaw += w;
+        nicheIssueCount++;
+      }
+      if ((issue.workaround_status ?? 'unknown') === 'confirmed') workaroundCount++;
       neg++;
     } else if (issue.sentiment === 'positive') {
+      const w = positiveEvidenceWeight(issue, nowMs);
       weightedPos += w;
       pos++;
     }
   }
 
-  const effectiveNeg = Math.max(0, weightedNeg - POS_OFFSET * weightedPos);
-  const denomHours = Math.max(MIN_AGE_HOURS, ageHours);
-  const bugRate = effectiveNeg / denomHours;
-  const baseScore = 10 * Math.exp(-DECAY_K * bugRate);
+  // Positives cancel non-core-serious negatives first (those are easier to dismiss),
+  // residual positive budget then nibbles at core-serious negatives.
+  const posBudget = POS_OFFSET * weightedPos;
+  const otherCancel = Math.min(weightedNegOther, posBudget);
+  const coreCancel = Math.min(weightedNegCoreSerious, Math.max(0, posBudget - otherCancel));
+  const effectiveCore = Math.max(0, weightedNegCoreSerious - coreCancel);
+  const effectiveOther = Math.max(0, weightedNegOther - otherCancel);
+
+  const releaseMaturity = clamp(ageHours / (24 * 7), 0.35, 1);
+  const coreRiskIndex = effectiveCore / releaseMaturity;
+  const coreScore = issues.length === 0 ? 5 : scoreFromRiskIndex(coreRiskIndex);
+  const otherDrop = OTHER_DROP_MAX * (1 - Math.exp(-effectiveOther / OTHER_DROP_TAU));
+  const baseScore = issues.length === 0 ? 5 : Math.max(MIN_SCORE, coreScore - otherDrop);
 
   let final = baseScore;
   let ratingAvg: number | null = null;
@@ -127,23 +281,50 @@ export function calculateStability(
     final = baseScore * (1 - ratingWeight) + ratingAvg * ratingWeight;
   }
 
-  const rounded = Math.round(clamp(final, 0, 10) * 10) / 10;
+  let floorApplied: 'none' | 'core' | 'peer' = 'none';
+  const totalWeightedNeg = weightedNegCoreSerious + weightedNegOther;
+  if (
+    peerContext &&
+    Number.isFinite(peerContext.medianWeightedNeg) &&
+    peerContext.medianWeightedNeg > 0 &&
+    totalWeightedNeg <= peerContext.medianWeightedNeg &&
+    final < PEER_MEDIAN_FLOOR
+  ) {
+    final = PEER_MEDIAN_FLOOR;
+    floorApplied = 'peer';
+  }
+
+  const rounded = Math.round(clamp(final, MIN_SCORE, 10) * 10) / 10;
+  const grade = gradeForScore(rounded, issues.length);
+  const signalCount = neg + pos + ratings.length;
+  const confidenceLevel: 'low' | 'medium' | 'high' =
+    signalCount >= 8 ? 'high' : signalCount >= 3 ? 'medium' : 'low';
   return {
     score: rounded,
     color: colorForScore(rounded),
     state: 'rated',
+    grade,
     breakdown: {
       ageHours: Math.round(ageHours * 10) / 10,
-      weightedNegSum: Math.round(weightedNeg * 100) / 100,
+      weightedNegSum: Math.round(totalWeightedNeg * 100) / 100,
       weightedPosSum: Math.round(weightedPos * 100) / 100,
-      bugRate: Math.round(bugRate * 1000) / 1000,
+      riskIndex: Math.round(coreRiskIndex * 1000) / 1000,
       baseScore: Math.round(baseScore * 10) / 10,
       blendedFromIssues: Math.round(baseScore * 10) / 10,
       issueCount: issues.length,
       negativeCount: neg,
       positiveCount: pos,
+      coreIssueCount,
+      coreSeriousCount,
+      nicheIssueCount,
+      workaroundCount,
+      nicheRawSum: Math.round(weightedNegNicheRaw * 100) / 100,
+      topRiskFactor: topRiskFactor(coreSeriousCount, nicheIssueCount, workaroundCount, neg),
       ratingAvg: ratingAvg === null ? null : Math.round(ratingAvg * 10) / 10,
       ratingCount: ratings.length,
+      signalCount,
+      confidenceLevel,
+      floorApplied,
     },
   };
 }
