@@ -323,6 +323,30 @@ async function buildVersionIssuesPayload(
     summary: i.summary,
   }));
 
+  const facetFields: Array<[string, string[]]> = [
+    ['sentiment', ['negative', 'positive', 'neutral']],
+    ['severity', ['critical', 'high', 'medium', 'low']],
+    ['functionality', ['core', 'integration', 'provider', 'docs', 'unknown']],
+    ['impact_scope', ['broad', 'moderate', 'niche']],
+    ['affected_user_share', ['many', 'some', 'few', 'unknown']],
+    ['workaround_status', ['none', 'partial', 'confirmed', 'unknown']],
+  ];
+  const facets: Record<string, Record<string, number>> = {};
+  for (const [field, values] of facetFields) {
+    const map: Record<string, number> = Object.fromEntries(values.map((v) => [v, 0]));
+    for (const i of allRelated) {
+      const v = ((i as unknown as Record<string, string | null>)[field] ?? 'unknown') as string;
+      if (v in map) map[v] = (map[v] ?? 0) + 1;
+    }
+    facets[field] = map;
+  }
+  const confThresholds: Array<[string, number]> = [['all', 0], ['q30', 0.3], ['q50', 0.5], ['q70', 0.7], ['q90', 0.9]];
+  const confCounts: Record<string, number> = {};
+  for (const [id, min] of confThresholds) {
+    confCounts[id] = allRelated.filter((i) => (i.confidence ?? 0) >= min).length;
+  }
+  facets['confidence'] = confCounts;
+
   const all_stats = {
     total: totalRelated,
     negative: allRelated.filter((i) => i.sentiment === 'negative').length,
@@ -330,6 +354,7 @@ async function buildVersionIssuesPayload(
     core: allRelated.filter((i) => i.functionality === 'core').length,
     niche: allRelated.filter((i) => i.impact_scope === 'niche').length,
     workarounds: allRelated.filter((i) => i.workaround_status === 'confirmed').length,
+    facets,
   };
 
   const ratings = await listRatingsForVersion(env, version.id);

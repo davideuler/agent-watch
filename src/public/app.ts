@@ -72,6 +72,7 @@ interface AllStats {
   core: number;
   niche: number;
   workarounds: number;
+  facets?: Record<string, Record<string, number>>;
 }
 
 interface VersionIssuesResponse {
@@ -608,6 +609,7 @@ interface IssuesPageContext {
 }
 
 let currentIssuesPageContext: IssuesPageContext | null = null;
+let currentAllStats: AllStats | null = null;
 
 type IssuesPreset = Array<{ facetId: string; value: string }>;
 let pendingIssuesPreset: IssuesPreset | null = null;
@@ -650,15 +652,18 @@ function renderIssueFilters(items: IssueItem[]): void {
   }
   bar.hidden = false;
 
+  const allFacets = currentAllStats?.facets;
   const counts: Record<string, Record<string, number>> = {};
   for (const f of FACET_DEFS) {
-    counts[f.id] = Object.fromEntries(f.values.map((v) => [v, 0]));
-  }
-  for (const item of items) {
-    for (const f of FACET_DEFS) {
-      const v = getFacetFieldValue(item, f.field);
-      const map = counts[f.id]!;
-      if (v in map) map[v] = (map[v] ?? 0) + 1;
+    if (allFacets?.[f.field]) {
+      counts[f.id] = { ...allFacets[f.field]! };
+    } else {
+      counts[f.id] = Object.fromEntries(f.values.map((v) => [v, 0]));
+      for (const item of items) {
+        const v = getFacetFieldValue(item, f.field);
+        const map = counts[f.id]!;
+        if (v in map) map[v] = (map[v] ?? 0) + 1;
+      }
     }
   }
 
@@ -691,9 +696,10 @@ function renderIssueFilters(items: IssueItem[]): void {
   confGroup.innerHTML = `<span class="filter-group-label">Confidence</span>`;
   const confChips = document.createElement('div');
   confChips.className = 'filter-chips';
+  const allConfCounts = allFacets?.['confidence'];
   for (const bucket of CONFIDENCE_BUCKETS) {
     const active = Math.abs(currentIssueFilters.confidenceMin - bucket.min) < 1e-9;
-    const matching = items.filter((it) => (it.confidence ?? 0) >= bucket.min).length;
+    const matching = allConfCounts?.[bucket.id] ?? items.filter((it) => (it.confidence ?? 0) >= bucket.min).length;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `filter-chip${active ? ' active' : ''}`;
@@ -888,6 +894,7 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
   const capNote = $('#issues-cap-note')!;
   const back = $<HTMLAnchorElement>('#issues-back')!;
 
+  currentAllStats = null;
   titleEl.textContent = `Loading ${tag}…`;
   metaEl.textContent = '';
   list.innerHTML = '<li class="muted">Loading issues…</li>';
@@ -975,6 +982,7 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
     return;
   }
   currentIssueData = data.issues;
+  currentAllStats = data.all_stats ?? null;
   currentIssueFilters = makeEmptyFilters();
   if (pendingIssuesPreset) {
     for (const { facetId, value } of pendingIssuesPreset) {
