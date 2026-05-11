@@ -39,8 +39,7 @@
     "DEFAULT_PROJECT": "openclaw",
     "LLM_BASE_URL": "https://api.openai.com/v1",
     "LLM_MODEL_NAME": "gpt-5.4-mini",
-    "PUBLIC_BASE_URL": "https://agentwatch.aicompass.dev",
-    "PUBLIC_GA_MEASUREMENT_ID": ""
+    "PUBLIC_BASE_URL": "https://agentwatch.aicompass.dev"
   },
   "observability": {
     "enabled": true
