@@ -266,8 +266,7 @@ export function calculateStability(
   const effectiveCore = Math.max(0, weightedNegCoreSerious - coreCancel);
   const effectiveOther = Math.max(0, weightedNegOther - otherCancel);
 
-  const releaseMaturity = clamp(ageHours / (24 * 7), 0.35, 1);
-  const coreRiskIndex = effectiveCore / releaseMaturity;
+  const coreRiskIndex = effectiveCore;
   const coreScore = issues.length === 0 ? 5 : scoreFromRiskIndex(coreRiskIndex);
   const otherDrop = OTHER_DROP_MAX * (1 - Math.exp(-effectiveOther / OTHER_DROP_TAU));
   const baseScore = issues.length === 0 ? 5 : Math.max(MIN_SCORE, coreScore - otherDrop);
