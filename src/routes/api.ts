@@ -273,6 +273,15 @@ const ISSUES_PER_PAGE_MAX = 40;
 const ISSUES_MAX_PAGES = 30;
 const ISSUES_HARD_CAP = ISSUES_PER_PAGE_MAX * ISSUES_MAX_PAGES;
 
+const ISSUES_CACHE_VERSION = 'v1';
+const ISSUES_CACHE_TTL = 600;
+const ISSUES_CACHE_FRESH_SECONDS = 300;
+const ISSUES_REFRESH_LOCK_SECONDS = 30;
+const issuesCacheKey = (versionId: number, page: number, perPage: number) =>
+  `issues:${ISSUES_CACHE_VERSION}:${versionId}:${page}:${perPage}`;
+const issuesRefreshKey = (versionId: number, page: number, perPage: number) =>
+  `issues:${ISSUES_CACHE_VERSION}:${versionId}:${page}:${perPage}:r`;
+
 function clampPositiveInt(raw: string | undefined, fallback: number, max: number): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -280,12 +289,12 @@ function clampPositiveInt(raw: string | undefined, fallback: number, max: number
 }
 
 async function buildVersionIssuesPayload(
-  c: any,
+  env: Env,
   version: VersionRow,
   page: number,
   perPage: number,
 ) {
-  const issues = await listIssuesForProject(c.env, version.project_id);
+  const issues = await listIssuesForProject(env, version.project_id);
   const allRelated = issues.filter((i) => i.target_version === version.tag_name);
   const totalRelated = allRelated.length;
   const considered = Math.min(totalRelated, ISSUES_HARD_CAP);
@@ -314,7 +323,16 @@ async function buildVersionIssuesPayload(
     summary: i.summary,
   }));
 
-  const ratings = await listRatingsForVersion(c.env, version.id);
+  const all_stats = {
+    total: totalRelated,
+    negative: allRelated.filter((i) => i.sentiment === 'negative').length,
+    positive: allRelated.filter((i) => i.sentiment === 'positive').length,
+    core: allRelated.filter((i) => i.functionality === 'core').length,
+    niche: allRelated.filter((i) => i.impact_scope === 'niche').length,
+    workarounds: allRelated.filter((i) => i.workaround_status === 'confirmed').length,
+  };
+
+  const ratings = await listRatingsForVersion(env, version.id);
   return {
     version: {
       id: version.id,
@@ -332,14 +350,75 @@ async function buildVersionIssuesPayload(
     total_pages: totalPages,
     max_pages: ISSUES_MAX_PAGES,
     max_per_page: ISSUES_PER_PAGE_MAX,
-    // Back-compat alias for older clients that read `issues_total`.
     issues_total: totalRelated,
+    all_stats,
     ratings: ratings.map((r) => ({
       score: r.score,
       comment: r.comment,
       created_at: r.created_at,
     })),
   };
+}
+
+async function refreshIssuesCache(
+  env: Env,
+  version: VersionRow,
+  page: number,
+  perPage: number,
+): Promise<void> {
+  const lockKey = issuesRefreshKey(version.id, page, perPage);
+  try {
+    const existing = await env.CACHE.get(lockKey);
+    if (existing) return;
+    await env.CACHE.put(lockKey, '1', { expirationTtl: ISSUES_REFRESH_LOCK_SECONDS });
+  } catch (err) {
+    console.error('[issues-cache] lock failed', err);
+    return;
+  }
+  try {
+    const payload = await buildVersionIssuesPayload(env, version, page, perPage);
+    const entry: CachedEntry = { cached_at: new Date().toISOString(), payload: JSON.stringify(payload) };
+    await env.CACHE.put(
+      issuesCacheKey(version.id, page, perPage),
+      JSON.stringify(entry),
+      { expirationTtl: ISSUES_CACHE_TTL },
+    );
+  } catch (err) {
+    console.error('[issues-cache] refresh failed', err);
+  } finally {
+    try { await env.CACHE.delete(lockKey); } catch { /* best effort */ }
+  }
+}
+
+async function getVersionIssuesWithCache(
+  c: { env: Env; executionCtx: { waitUntil: (p: Promise<unknown>) => void } },
+  version: VersionRow,
+  page: number,
+  perPage: number,
+): Promise<ReturnType<typeof buildVersionIssuesPayload> extends Promise<infer T> ? T : never> {
+  const cacheKey = issuesCacheKey(version.id, page, perPage);
+  let cachedRaw: string | null = null;
+  try { cachedRaw = await c.env.CACHE.get(cacheKey); } catch { /* ignore */ }
+
+  const entry = parseCachedEntry(cachedRaw);
+  if (entry) {
+    const ageSec = entryAgeSeconds(entry);
+    if (ageSec >= ISSUES_CACHE_FRESH_SECONDS) {
+      c.executionCtx.waitUntil(refreshIssuesCache(c.env, version, page, perPage));
+    }
+    try {
+      return JSON.parse(entry.payload);
+    } catch { /* fall through */ }
+  }
+
+  const payload = await buildVersionIssuesPayload(c.env, version, page, perPage);
+  const fresh: CachedEntry = { cached_at: new Date().toISOString(), payload: JSON.stringify(payload) };
+  c.executionCtx.waitUntil(
+    c.env.CACHE.put(cacheKey, JSON.stringify(fresh), { expirationTtl: ISSUES_CACHE_TTL }).catch((err) =>
+      console.error('[issues-cache] write failed', err),
+    ),
+  );
+  return payload;
 }
 
 api.get('/versions/:id/issues', async (c) => {
@@ -349,7 +428,7 @@ api.get('/versions/:id/issues', async (c) => {
   if (!version) return c.json({ error: 'version not found' }, 404);
   const perPage = clampPositiveInt(c.req.query('per_page') ?? c.req.query('limit'), ISSUES_PER_PAGE_MAX, ISSUES_PER_PAGE_MAX);
   const page = clampPositiveInt(c.req.query('page'), 1, ISSUES_MAX_PAGES);
-  return c.json(await buildVersionIssuesPayload(c, version, page, perPage));
+  return c.json(await getVersionIssuesWithCache(c, version, page, perPage));
 });
 
 api.get('/projects/:slug/versions/:tag/issues', async (c) => {
@@ -361,7 +440,7 @@ api.get('/projects/:slug/versions/:tag/issues', async (c) => {
   if (!version) return c.json({ error: 'version not found' }, 404);
   const perPage = clampPositiveInt(c.req.query('per_page') ?? c.req.query('limit'), ISSUES_PER_PAGE_MAX, ISSUES_PER_PAGE_MAX);
   const page = clampPositiveInt(c.req.query('page'), 1, ISSUES_MAX_PAGES);
-  const payload = await buildVersionIssuesPayload(c, version, page, perPage);
+  const payload = await getVersionIssuesWithCache(c, version, page, perPage);
   return c.json({
     ...payload,
     project: {

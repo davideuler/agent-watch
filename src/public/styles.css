@@ -756,6 +756,16 @@ a:hover {
   text-transform: uppercase;
   color: var(--text-dim);
 }
+.vc-signal-clickable {
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.1s, box-shadow 0.12s, background 0.12s;
+}
+.vc-signal-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
+}
+.vc-signal-clickable:active { transform: translateY(0); }
 
 /* META */
 .vc-meta {
@@ -1209,20 +1219,23 @@ a:hover {
 .vc-issues-all {
   font-family: var(--font-mono);
   font-size: 0.62rem;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--accent);
-  padding: 0.18rem 0.55rem;
-  border: 1px solid var(--border);
+  padding: 0.22rem 0.7rem;
+  border: 1.5px solid var(--accent);
   border-radius: 3px;
-  background: transparent;
+  background: var(--accent-soft);
   transition: all 0.15s;
   white-space: nowrap;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .vc-issues-all:hover {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-color: var(--accent);
   text-decoration: none;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 /* ── BACK LINK + ISSUES PAGE ── */
@@ -1281,6 +1294,47 @@ a:hover {
   color: var(--danger);
   background: rgba(254, 226, 226, 0.95);
   border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border));
+  border-radius: 999px;
+  padding: 0.14rem 0.48rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.issues-stat-total {
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+.issues-stat-positive {
+  color: var(--good);
+  background: rgba(220, 252, 231, 0.9);
+  border: 1px solid color-mix(in srgb, var(--good) 40%, var(--border));
+  border-radius: 999px;
+  padding: 0.14rem 0.48rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.issues-stat-core {
+  color: var(--danger);
+  background: rgba(254, 226, 226, 0.7);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: 999px;
+  padding: 0.14rem 0.48rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.issues-stat-niche {
+  color: var(--neutral);
+  background: rgba(238, 242, 255, 0.9);
+  border: 1px solid color-mix(in srgb, var(--neutral) 40%, var(--border));
+  border-radius: 999px;
+  padding: 0.14rem 0.48rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.issues-stat-workarounds {
+  color: var(--good);
+  background: rgba(220, 252, 231, 0.7);
+  border: 1px solid color-mix(in srgb, var(--good) 35%, var(--border));
   border-radius: 999px;
   padding: 0.14rem 0.48rem;
   font-size: 0.72rem;

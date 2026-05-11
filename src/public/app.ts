@@ -65,6 +65,15 @@ interface IssueItem {
   summary: string | null;
 }
 
+interface AllStats {
+  total: number;
+  negative: number;
+  positive: number;
+  core: number;
+  niche: number;
+  workarounds: number;
+}
+
 interface VersionIssuesResponse {
   version: { id: number; tag_name: string; name: string | null; published_at: string };
   issues: IssueItem[];
@@ -76,6 +85,7 @@ interface VersionIssuesResponse {
   total_pages?: number;
   max_pages?: number;
   max_per_page?: number;
+  all_stats?: AllStats;
   ratings: Array<{ score: number; comment: string | null; created_at: string }>;
   project?: { slug: string; name: string; github_url: string };
 }
@@ -426,6 +436,33 @@ function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
   $('[data-signal-workarounds]', node)!.textContent = String(v.stability.breakdown.workaroundCount ?? 0);
   $('[data-signal-ratings]', node)!.textContent = String(v.stability.breakdown.ratingCount);
 
+  const makeSignalClickable = (
+    el: HTMLElement | null,
+    preset: IssuesPreset | null,
+    title: string,
+  ) => {
+    if (!el) return;
+    el.classList.add('vc-signal-clickable');
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.title = title;
+    const go = () => {
+      pendingIssuesPreset = preset;
+      void navigateToIssues(slug, v.tag_name, 1);
+    };
+    el.addEventListener('click', go);
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  };
+
+  makeSignalClickable($('.vc-signal-issues', node), null, 'View all issues');
+  makeSignalClickable($('.vc-signal-core', node), [{ facetId: 'area', value: 'core' }], 'View core issues');
+  makeSignalClickable($('.vc-signal-niche', node), [{ facetId: 'scope', value: 'niche' }], 'View niche issues');
+  makeSignalClickable(
+    $('.vc-signal-workarounds', node),
+    [{ facetId: 'workaround', value: 'confirmed' }],
+    'View issues with confirmed workarounds',
+  );
+
   const fill = $<HTMLElement>('.vc-bar-fill', node)!;
   fill.style.width = `${(v.stability.score / 10) * 100}%`;
   fill.style.background = v.stability.color;
@@ -571,6 +608,9 @@ interface IssuesPageContext {
 }
 
 let currentIssuesPageContext: IssuesPageContext | null = null;
+
+type IssuesPreset = Array<{ facetId: string; value: string }>;
+let pendingIssuesPreset: IssuesPreset | null = null;
 
 function getFacetFieldValue(item: IssueItem, field: FacetField): string {
   const v = item[field];
@@ -887,8 +927,6 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
   const serverPage = data.page ?? safePage;
   const pageStart = total === 0 ? 0 : (serverPage - 1) * ISSUES_PER_PAGE + 1;
   const pageEnd = Math.min(considered, serverPage * ISSUES_PER_PAGE);
-  const negativeTotal = data.issues.filter((issue) => issue.sentiment === 'negative').length;
-
   const ctx: IssuesPageContext = {
     slug,
     tag,
@@ -900,9 +938,20 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
   };
   currentIssuesPageContext = ctx;
 
-  countLabel.innerHTML = `
-    <span>${data.issues.length} issue${data.issues.length === 1 ? '' : 's'} on this page</span>
-    <span class="issues-negative-count">${negativeTotal} negative</span>`;
+  const s = data.all_stats;
+  if (s && s.total > 0) {
+    const parts: string[] = [
+      `<span class="issues-stat-total">${s.total} total</span>`,
+    ];
+    if (s.negative > 0) parts.push(`<span class="issues-negative-count">${s.negative} negative</span>`);
+    if (s.positive > 0) parts.push(`<span class="issues-stat-positive">${s.positive} positive</span>`);
+    if (s.core > 0) parts.push(`<span class="issues-stat-core">${s.core} core</span>`);
+    if (s.niche > 0) parts.push(`<span class="issues-stat-niche">${s.niche} niche</span>`);
+    if (s.workarounds > 0) parts.push(`<span class="issues-stat-workarounds">${s.workarounds} workarounds</span>`);
+    countLabel.innerHTML = parts.join('');
+  } else {
+    countLabel.textContent = `${total} issue${total === 1 ? '' : 's'}`;
+  }
 
   if (total === 0) {
     capNote.textContent = 'No issues are linked to this release yet.';
@@ -927,6 +976,12 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
   }
   currentIssueData = data.issues;
   currentIssueFilters = makeEmptyFilters();
+  if (pendingIssuesPreset) {
+    for (const { facetId, value } of pendingIssuesPreset) {
+      currentIssueFilters.facets[facetId]?.add(value);
+    }
+    pendingIssuesPreset = null;
+  }
   rerenderFilteredIssues();
   renderIssuesPagination(ctx);
 }
