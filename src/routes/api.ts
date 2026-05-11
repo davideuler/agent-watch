@@ -451,7 +451,7 @@ api.get('/versions/:id/issues', async (c) => {
   if (!Number.isInteger(id)) return c.json({ error: 'invalid id' }, 400);
   const version = await getVersionById(c.env, id);
   if (!version) return c.json({ error: 'version not found' }, 404);
-  const perPage = clampPositiveInt(c.req.query('per_page') ?? c.req.query('limit'), ISSUES_PER_PAGE_MAX, ISSUES_PER_PAGE_MAX);
+  const perPage = clampPositiveInt(c.req.query('per_page') ?? c.req.query('limit'), ISSUES_PER_PAGE_MAX, ISSUES_HARD_CAP);
   const page = clampPositiveInt(c.req.query('page'), 1, ISSUES_MAX_PAGES);
   return c.json(await getVersionIssuesWithCache(c, version, page, perPage));
 });
@@ -463,7 +463,7 @@ api.get('/projects/:slug/versions/:tag/issues', async (c) => {
   if (!project) return c.json({ error: 'project not found' }, 404);
   const version = await getVersionByTag(c.env, project.id, tag);
   if (!version) return c.json({ error: 'version not found' }, 404);
-  const perPage = clampPositiveInt(c.req.query('per_page') ?? c.req.query('limit'), ISSUES_PER_PAGE_MAX, ISSUES_PER_PAGE_MAX);
+  const perPage = clampPositiveInt(c.req.query('per_page') ?? c.req.query('limit'), ISSUES_PER_PAGE_MAX, ISSUES_HARD_CAP);
   const page = clampPositiveInt(c.req.query('page'), 1, ISSUES_MAX_PAGES);
   const payload = await getVersionIssuesWithCache(c, version, page, perPage);
   return c.json({

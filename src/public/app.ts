@@ -173,9 +173,8 @@ function projectPath(slug: string): string {
   return `/projects/${encodeURIComponent(slug)}`;
 }
 
-function issuesPath(slug: string, tag: string, page: number = 1): string {
-  const base = `/projects/${encodeURIComponent(slug)}/v/${encodeURIComponent(tag)}/issues`;
-  return page > 1 ? `${base}?page=${page}` : base;
+function issuesPath(slug: string, tag: string): string {
+  return `/projects/${encodeURIComponent(slug)}/v/${encodeURIComponent(tag)}/issues`;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -449,7 +448,7 @@ function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
     el.title = title;
     const go = () => {
       pendingIssuesPreset = preset;
-      void navigateToIssues(slug, v.tag_name, 1);
+      void navigateToIssues(slug, v.tag_name);
     };
     el.addEventListener('click', go);
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
@@ -525,7 +524,7 @@ async function loadDetail(v: VersionItem, slug: string, root: HTMLElement) {
       total > ISSUES_PER_CARD ? `View all ${targetTotal} →` : `View page →`;
     allLink.onclick = (e) => {
       e.preventDefault();
-      void navigateToIssues(slug, v.tag_name, 1);
+      void navigateToIssues(slug, v.tag_name);
     };
   }
 
@@ -601,15 +600,12 @@ let currentIssueData: IssueItem[] = [];
 interface IssuesPageContext {
   slug: string;
   tag: string;
-  page: number;
-  perPage: number;
-  totalPages: number;
   total: number;
-  totalConsidered: number;
 }
 
 let currentIssuesPageContext: IssuesPageContext | null = null;
 let currentAllStats: AllStats | null = null;
+let currentClientPage = 1;
 
 type IssuesPreset = Array<{ facetId: string; value: string }>;
 let pendingIssuesPreset: IssuesPreset | null = null;
@@ -719,6 +715,7 @@ function renderIssueFilters(items: IssueItem[]): void {
   clearBtn.hidden = active === 0;
   clearBtn.onclick = () => {
     currentIssueFilters = makeEmptyFilters();
+    currentClientPage = 1;
     rerenderFilteredIssues();
   };
 }
@@ -728,25 +725,53 @@ function toggleFacet(facetId: string, value: string): void {
   if (!set) return;
   if (set.has(value)) set.delete(value);
   else set.add(value);
+  currentClientPage = 1;
   rerenderFilteredIssues();
 }
 
 function setConfidenceMin(min: number): void {
   currentIssueFilters.confidenceMin = min;
+  currentClientPage = 1;
   rerenderFilteredIssues();
 }
 
 function rerenderFilteredIssues(): void {
   const list = document.getElementById('issues-page-list');
+  const capNote = document.getElementById('issues-cap-note');
   if (!list) return;
+
   renderIssueFilters(currentIssueData);
   const filtered = applyFilters(currentIssueData, currentIssueFilters);
+  const totalClientPages = Math.max(1, Math.ceil(filtered.length / ISSUES_PER_PAGE));
+  if (currentClientPage > totalClientPages) currentClientPage = 1;
+
+  renderClientPagination(currentClientPage, totalClientPages);
+
+  const activeFilters = activeFilterCount(currentIssueFilters);
+  if (capNote) {
+    if (filtered.length === 0) {
+      capNote.textContent = activeFilters > 0 ? 'No issues match the current filters.' : 'No issues linked to this release yet.';
+    } else if (totalClientPages > 1) {
+      const start = (currentClientPage - 1) * ISSUES_PER_PAGE + 1;
+      const end = Math.min(currentClientPage * ISSUES_PER_PAGE, filtered.length);
+      capNote.textContent = activeFilters > 0
+        ? `Filtered: ${filtered.length} of ${currentIssueData.length} · page ${currentClientPage}/${totalClientPages} · showing ${start}–${end}`
+        : `Page ${currentClientPage} of ${totalClientPages} · showing ${start}–${end} of ${filtered.length}`;
+    } else {
+      capNote.textContent = activeFilters > 0
+        ? `Filtered: ${filtered.length} of ${currentIssueData.length} issue${currentIssueData.length === 1 ? '' : 's'}`
+        : `All ${filtered.length} issue${filtered.length === 1 ? '' : 's'}`;
+    }
+  }
+
   if (filtered.length === 0) {
     list.innerHTML = '<li class="empty">No issues match the current filters.</li>';
     return;
   }
+  const pageStart = (currentClientPage - 1) * ISSUES_PER_PAGE;
+  const pageItems = filtered.slice(pageStart, pageStart + ISSUES_PER_PAGE);
   list.innerHTML = '';
-  for (const i of filtered) list.appendChild(renderIssueLi(i, 'full'));
+  for (const i of pageItems) list.appendChild(renderIssueLi(i, 'full'));
 }
 
 // ---------------------------------------------------------------------------
@@ -868,22 +893,22 @@ function paintStars(root: HTMLElement, count: number, cls: 'hover' | 'active') {
 async function navigateToIssues(
   slug: string,
   tag: string,
-  page: number = 1,
   urlMode: 'push' | 'replace' = 'push',
 ) {
-  pushUrl(issuesPath(slug, tag, page), urlMode);
-  await renderIssuesPage(slug, tag, page);
+  pushUrl(issuesPath(slug, tag), urlMode);
+  await renderIssuesPage(slug, tag);
 }
 
-async function goToIssuesPage(page: number): Promise<void> {
-  const ctx = currentIssuesPageContext;
-  if (!ctx) return;
-  const target = Math.min(Math.max(1, page), ctx.totalPages);
-  if (target === ctx.page) return;
-  await navigateToIssues(ctx.slug, ctx.tag, target);
+function goToClientPage(page: number): void {
+  const filtered = applyFilters(currentIssueData, currentIssueFilters);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ISSUES_PER_PAGE));
+  const target = Math.min(Math.max(1, page), totalPages);
+  if (target === currentClientPage) return;
+  currentClientPage = target;
+  rerenderFilteredIssues();
 }
 
-async function renderIssuesPage(slug: string, tag: string, page: number = 1): Promise<void> {
+async function renderIssuesPage(slug: string, tag: string): Promise<void> {
   setView('issues');
   highlightTab(slug);
   const list = $('#issues-page-list')!;
@@ -895,6 +920,7 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
   const back = $<HTMLAnchorElement>('#issues-back')!;
 
   currentAllStats = null;
+  currentClientPage = 1;
   titleEl.textContent = `Loading ${tag}…`;
   metaEl.textContent = '';
   list.innerHTML = '<li class="muted">Loading issues…</li>';
@@ -906,16 +932,15 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
     void switchProject(slug);
   };
 
-  const safePage = Math.min(Math.max(1, Math.floor(page) || 1), ISSUES_MAX_PAGES);
   let data: VersionIssuesResponse;
   try {
     data = await api<VersionIssuesResponse>(
-      `/api/projects/${encodeURIComponent(slug)}/versions/${encodeURIComponent(tag)}/issues?page=${safePage}&per_page=${ISSUES_PER_PAGE}`,
+      `/api/projects/${encodeURIComponent(slug)}/versions/${encodeURIComponent(tag)}/issues?per_page=${ISSUES_PAGE_CAP}`,
     );
   } catch (err) {
     titleEl.textContent = 'Could not load issues';
     list.innerHTML = `<li class="empty">Failed: ${escapeHtml((err as Error).message)}</li>`;
-    renderIssuesPagination(null);
+    renderClientPagination(1, 1);
     return;
   }
 
@@ -929,27 +954,11 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
   metaEl.textContent = subParts.join(' · ');
 
   const total = data.total ?? data.issues_total ?? data.issues.length;
-  const considered = data.total_considered ?? Math.min(total, ISSUES_PAGE_CAP);
-  const totalPages = data.total_pages ?? Math.max(1, Math.min(ISSUES_MAX_PAGES, Math.ceil(considered / ISSUES_PER_PAGE)));
-  const serverPage = data.page ?? safePage;
-  const pageStart = total === 0 ? 0 : (serverPage - 1) * ISSUES_PER_PAGE + 1;
-  const pageEnd = Math.min(considered, serverPage * ISSUES_PER_PAGE);
-  const ctx: IssuesPageContext = {
-    slug,
-    tag,
-    page: serverPage,
-    perPage: ISSUES_PER_PAGE,
-    totalPages,
-    total,
-    totalConsidered: considered,
-  };
-  currentIssuesPageContext = ctx;
+  currentIssuesPageContext = { slug, tag, total };
 
   const s = data.all_stats;
   if (s && s.total > 0) {
-    const parts: string[] = [
-      `<span class="issues-stat-total">${s.total} total</span>`,
-    ];
+    const parts: string[] = [`<span class="issues-stat-total">${s.total} total</span>`];
     if (s.negative > 0) parts.push(`<span class="issues-negative-count">${s.negative} negative</span>`);
     if (s.positive > 0) parts.push(`<span class="issues-stat-positive">${s.positive} positive</span>`);
     if (s.core > 0) parts.push(`<span class="issues-stat-core">${s.core} core</span>`);
@@ -960,27 +969,6 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
     countLabel.textContent = `${total} issue${total === 1 ? '' : 's'}`;
   }
 
-  if (total === 0) {
-    capNote.textContent = 'No issues are linked to this release yet.';
-  } else if (considered < total) {
-    capNote.textContent =
-      `Page ${serverPage} of ${totalPages} · showing issues ${pageStart}–${pageEnd} of ${considered} ` +
-      `(of ${total} total · capped at ${ISSUES_PAGE_CAP} for paging).`;
-  } else if (totalPages > 1) {
-    capNote.textContent = `Page ${serverPage} of ${totalPages} · showing issues ${pageStart}–${pageEnd} of ${total}.`;
-  } else {
-    capNote.textContent = `All ${total} matched issue${total === 1 ? '' : 's'}.`;
-  }
-
-  if (data.issues.length === 0) {
-    list.innerHTML = '<li class="empty">No issues linked to this release yet.</li>';
-    const bar = document.getElementById('issues-filter-bar');
-    if (bar) bar.hidden = true;
-    currentIssueData = [];
-    currentIssueFilters = makeEmptyFilters();
-    renderIssuesPagination(ctx);
-    return;
-  }
   currentIssueData = data.issues;
   currentAllStats = data.all_stats ?? null;
   currentIssueFilters = makeEmptyFilters();
@@ -991,76 +979,48 @@ async function renderIssuesPage(slug: string, tag: string, page: number = 1): Pr
     pendingIssuesPreset = null;
   }
   rerenderFilteredIssues();
-  renderIssuesPagination(ctx);
 }
-
-function renderIssuesPagination(ctx: IssuesPageContext | null): void {
+function renderClientPagination(page: number, totalPages: number): void {
   const root = document.getElementById('issues-pagination');
   if (!root) return;
-  if (!ctx || ctx.totalPages <= 1) {
-    root.hidden = true;
-    root.innerHTML = '';
-    return;
-  }
+  if (totalPages <= 1) { root.hidden = true; root.innerHTML = ''; return; }
   root.hidden = false;
   root.innerHTML = '';
 
-  const make = (label: string, page: number, opts?: { active?: boolean; disabled?: boolean; ariaLabel?: string }) => {
+  const make = (label: string, targetPage: number, opts?: { active?: boolean; disabled?: boolean; ariaLabel?: string }) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `pager-btn${opts?.active ? ' active' : ''}`;
     btn.textContent = label;
     if (opts?.ariaLabel) btn.setAttribute('aria-label', opts.ariaLabel);
-    if (opts?.disabled) {
-      btn.disabled = true;
-    } else {
-      btn.addEventListener('click', () => {
-        void goToIssuesPage(page);
-      });
-    }
+    if (opts?.disabled) { btn.disabled = true; }
+    else { btn.addEventListener('click', () => goToClientPage(targetPage)); }
     return btn;
   };
 
-  root.appendChild(
-    make('‹ Prev', ctx.page - 1, { disabled: ctx.page <= 1, ariaLabel: 'Previous page' }),
-  );
+  root.appendChild(make('‹ Prev', page - 1, { disabled: page <= 1, ariaLabel: 'Previous page' }));
 
-  // Page-number buttons: keep a small window around current.
   const windowSize = 2;
-  const lo = Math.max(1, ctx.page - windowSize);
-  const hi = Math.min(ctx.totalPages, ctx.page + windowSize);
+  const lo = Math.max(1, page - windowSize);
+  const hi = Math.min(totalPages, page + windowSize);
 
   if (lo > 1) {
     root.appendChild(make('1', 1));
-    if (lo > 2) {
-      const sep = document.createElement('span');
-      sep.className = 'pager-ellipsis';
-      sep.textContent = '…';
-      root.appendChild(sep);
-    }
+    if (lo > 2) { const sep = document.createElement('span'); sep.className = 'pager-ellipsis'; sep.textContent = '…'; root.appendChild(sep); }
   }
-  for (let p = lo; p <= hi; p++) {
-    root.appendChild(make(String(p), p, { active: p === ctx.page }));
-  }
-  if (hi < ctx.totalPages) {
-    if (hi < ctx.totalPages - 1) {
-      const sep = document.createElement('span');
-      sep.className = 'pager-ellipsis';
-      sep.textContent = '…';
-      root.appendChild(sep);
-    }
-    root.appendChild(make(String(ctx.totalPages), ctx.totalPages));
+  for (let p = lo; p <= hi; p++) root.appendChild(make(String(p), p, { active: p === page }));
+  if (hi < totalPages) {
+    if (hi < totalPages - 1) { const sep = document.createElement('span'); sep.className = 'pager-ellipsis'; sep.textContent = '…'; root.appendChild(sep); }
+    root.appendChild(make(String(totalPages), totalPages));
   }
 
-  root.appendChild(
-    make('Next ›', ctx.page + 1, { disabled: ctx.page >= ctx.totalPages, ariaLabel: 'Next page' }),
-  );
+  root.appendChild(make('Next ›', page + 1, { disabled: page >= totalPages, ariaLabel: 'Next page' }));
 }
 
 async function rerenderActiveRoute(): Promise<void> {
   const route = parseRoute(location.pathname, location.search, location.hash);
   if (route.kind === 'issues') {
-    await renderIssuesPage(route.slug, route.tag, route.page);
+    await renderIssuesPage(route.slug, route.tag);
   } else if (route.kind === 'project') {
     state.currentSlug = route.slug;
     setView('home');
@@ -1090,7 +1050,7 @@ async function handleRoute(_urlMode: 'push' | 'replace'): Promise<void> {
       await renderProject();
       return;
     }
-    await renderIssuesPage(slug, route.tag, route.page);
+    await renderIssuesPage(slug, route.tag);
     return;
   }
 
@@ -1150,9 +1110,9 @@ async function bootstrap(): Promise<void> {
       highlightTab(slug);
       await renderProject();
     } else {
-      pushUrl(issuesPath(slug, initialRoute.tag, initialRoute.page), 'replace', false);
+      pushUrl(issuesPath(slug, initialRoute.tag), 'replace', false);
       highlightTab(slug);
-      await renderIssuesPage(slug, initialRoute.tag, initialRoute.page);
+      await renderIssuesPage(slug, initialRoute.tag);
     }
     await authPromise;
     trackPageView();
