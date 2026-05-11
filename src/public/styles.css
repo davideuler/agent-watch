@@ -1656,3 +1656,73 @@ a:hover {
   padding: 0 0.25rem;
   user-select: none;
 }
+
+/* ── STATUS PAGE ── */
+.status-hero {
+  display: block;
+  padding: 1.5rem 1.25rem 1rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.status-page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0.5rem 1.25rem 2.5rem;
+}
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+.status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1.25rem 1.25rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text);
+  position: relative;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+}
+.status-card:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  transform: translateY(-2px);
+}
+.status-card-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.02em;
+}
+.status-card-provider {
+  font-size: 0.8rem;
+  color: var(--text-dim, var(--text));
+  opacity: 0.7;
+}
+.status-card-url {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.7rem;
+  color: var(--text-mute, var(--text));
+  opacity: 0.55;
+  margin-top: 0.5rem;
+}
+.status-card-arrow {
+  position: absolute;
+  top: 0.9rem;
+  right: 1rem;
+  font-size: 1.1rem;
+  color: var(--text-mute, var(--text));
+  opacity: 0.4;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.status-card:hover .status-card-arrow {
+  opacity: 1;
+  color: var(--accent);
+  transform: translate(2px, -2px);
+}

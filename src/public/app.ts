@@ -133,7 +133,8 @@ if (AUTH_START_PATHS.has(currentPath) && (location.search || location.hash)) {
 type Route =
   | { kind: 'home' }
   | { kind: 'project'; slug: string }
-  | { kind: 'issues'; slug: string; tag: string; page: number };
+  | { kind: 'issues'; slug: string; tag: string; page: number }
+  | { kind: 'status' };
 
 function parseIssuesPageQuery(search: string): number {
   const params = new URLSearchParams(search);
@@ -153,6 +154,7 @@ function parseRoute(pathname: string, search: string, hash: string): Route {
       page: parseIssuesPageQuery(search),
     };
   }
+  if (path === '/status') return { kind: 'status' };
   const projectMatch = path.match(/^\/projects\/([^/]+)$/);
   if (projectMatch) return { kind: 'project', slug: decodeURIComponent(projectMatch[1]!) };
 
@@ -340,11 +342,13 @@ function pushUrl(path: string, mode: 'push' | 'replace' = 'push', shouldTrackPag
   if (shouldTrackPageView) trackPageView();
 }
 
-function setView(name: 'home' | 'issues'): void {
+function setView(name: 'home' | 'issues' | 'status'): void {
   const home = $('#home-view')!;
   const issues = $('#issues-view')!;
+  const status = $('#status-view')!;
   home.hidden = name !== 'home';
   issues.hidden = name !== 'issues';
+  status.hidden = name !== 'status';
 }
 
 function renderProjectsList(projects: ProjectListItem[]): void {
@@ -362,6 +366,18 @@ function renderProjectsList(projects: ProjectListItem[]): void {
     });
     tabsEl.appendChild(a);
   }
+  const statusA = document.createElement('a');
+  statusA.className = 'tab-btn tab-btn-status';
+  statusA.textContent = 'AI Status';
+  statusA.dataset.slug = '__status__';
+  statusA.href = '/status';
+  statusA.addEventListener('click', (e) => {
+    e.preventDefault();
+    pushUrl('/status');
+    setView('status');
+    highlightTab('__status__');
+  });
+  tabsEl.appendChild(statusA);
 }
 
 function highlightTab(slug: string | null): void {
@@ -1039,6 +1055,12 @@ async function handleRoute(_urlMode: 'push' | 'replace'): Promise<void> {
   if (!projects) return;
   const known = new Set(projects.projects.map((p) => p.slug));
 
+  if (route.kind === 'status') {
+    setView('status');
+    highlightTab('__status__');
+    return;
+  }
+
   if (route.kind === 'issues') {
     const slug = known.has(route.slug) ? route.slug : projects.default;
     state.currentSlug = slug;
@@ -1099,6 +1121,14 @@ async function bootstrap(): Promise<void> {
   renderProjectsList(projectsData.projects);
 
   const known = new Set(projectsData.projects.map((p) => p.slug));
+
+  if (initialRoute.kind === 'status') {
+    setView('status');
+    highlightTab('__status__');
+    await authPromise;
+    trackPageView();
+    return;
+  }
 
   if (initialRoute.kind === 'issues') {
     const slug = known.has(initialRoute.slug) ? initialRoute.slug : projectsData.default;
