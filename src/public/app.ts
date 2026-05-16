@@ -111,6 +111,11 @@ const ISSUES_PER_CARD = 20;
 const ISSUES_PER_PAGE = 40;
 const ISSUES_MAX_PAGES = 30;
 const ISSUES_PAGE_CAP = ISSUES_PER_PAGE * ISSUES_MAX_PAGES;
+const VERSIONS_PER_PAGE = 6;
+
+let currentVersionsData: VersionItem[] = [];
+let currentVersionsSlug = '';
+let currentVersionsPage = 1;
 
 const state = {
   user: null as MeResponse['user'],
@@ -400,11 +405,13 @@ async function renderProject() {
   if (!slug) return;
   const versionsEl = $('#versions')!;
   versionsEl.innerHTML = '<div class="loading">Loading…</div>';
+  renderVersionsPagination(1, 1);
   let data: ProjectDetail;
   try {
     data = await api<ProjectDetail>(`/api/projects/${encodeURIComponent(slug)}`);
   } catch (err) {
     versionsEl.innerHTML = `<div class="empty">Failed to load project: ${(err as Error).message}</div>`;
+    renderVersionsPagination(1, 1);
     return;
   }
   applyProjectDetail(data);
@@ -419,11 +426,81 @@ function applyProjectDetail(data: ProjectDetail): void {
 
   if (data.versions.length === 0) {
     versionsEl.innerHTML = '<div class="empty">No versions yet. The cron will populate them shortly.</div>';
+    renderVersionsPagination(1, 1);
     return;
   }
 
+  currentVersionsData = data.versions;
+  currentVersionsSlug = data.project.slug;
+  currentVersionsPage = 1;
+  renderVersionsPage();
+}
+
+function renderVersionsPage(): void {
+  const versionsEl = $('#versions');
+  if (!versionsEl) return;
+  const total = currentVersionsData.length;
+  if (total === 0) {
+    renderVersionsPagination(1, 1);
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(total / VERSIONS_PER_PAGE));
+  if (currentVersionsPage > totalPages) currentVersionsPage = totalPages;
+  if (currentVersionsPage < 1) currentVersionsPage = 1;
+  const start = (currentVersionsPage - 1) * VERSIONS_PER_PAGE;
+  const slice = currentVersionsData.slice(start, start + VERSIONS_PER_PAGE);
+
   versionsEl.innerHTML = '';
-  for (const v of data.versions) versionsEl.appendChild(renderVersionCard(v, data.project.slug));
+  for (const v of slice) versionsEl.appendChild(renderVersionCard(v, currentVersionsSlug));
+
+  renderVersionsPagination(currentVersionsPage, totalPages);
+}
+
+function goToVersionsPage(page: number): void {
+  const totalPages = Math.max(1, Math.ceil(currentVersionsData.length / VERSIONS_PER_PAGE));
+  const target = Math.min(totalPages, Math.max(1, page));
+  if (target === currentVersionsPage) return;
+  currentVersionsPage = target;
+  renderVersionsPage();
+  const versionsEl = $('#versions');
+  if (versionsEl) versionsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderVersionsPagination(page: number, totalPages: number): void {
+  const root = document.getElementById('versions-pagination');
+  if (!root) return;
+  if (totalPages <= 1) { root.hidden = true; root.innerHTML = ''; return; }
+  root.hidden = false;
+  root.innerHTML = '';
+
+  const make = (label: string, targetPage: number, opts?: { active?: boolean; disabled?: boolean; ariaLabel?: string }) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `pager-btn${opts?.active ? ' active' : ''}`;
+    btn.textContent = label;
+    if (opts?.ariaLabel) btn.setAttribute('aria-label', opts.ariaLabel);
+    if (opts?.disabled) { btn.disabled = true; }
+    else { btn.addEventListener('click', () => goToVersionsPage(targetPage)); }
+    return btn;
+  };
+
+  root.appendChild(make('‹ Prev', page - 1, { disabled: page <= 1, ariaLabel: 'Previous page' }));
+
+  const windowSize = 2;
+  const lo = Math.max(1, page - windowSize);
+  const hi = Math.min(totalPages, page + windowSize);
+
+  if (lo > 1) {
+    root.appendChild(make('1', 1));
+    if (lo > 2) { const sep = document.createElement('span'); sep.className = 'pager-ellipsis'; sep.textContent = '…'; root.appendChild(sep); }
+  }
+  for (let p = lo; p <= hi; p++) root.appendChild(make(String(p), p, { active: p === page }));
+  if (hi < totalPages) {
+    if (hi < totalPages - 1) { const sep = document.createElement('span'); sep.className = 'pager-ellipsis'; sep.textContent = '…'; root.appendChild(sep); }
+    root.appendChild(make(String(totalPages), totalPages));
+  }
+
+  root.appendChild(make('Next ›', page + 1, { disabled: page >= totalPages, ariaLabel: 'Next page' }));
 }
 
 function renderVersionCard(v: VersionItem, slug: string): HTMLElement {

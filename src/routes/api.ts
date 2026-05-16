@@ -288,13 +288,38 @@ function clampPositiveInt(raw: string | undefined, fallback: number, max: number
   return Math.min(max, Math.max(1, Math.floor(n)));
 }
 
+type VersionIssuesPayload = Awaited<ReturnType<typeof buildVersionIssuesPayload>>;
+type ProjectIssuesList = Awaited<ReturnType<typeof listIssuesForProject>>;
+
+// In-isolate dedupe: coalesces concurrent identical work within the same
+// Worker isolate so a project page hitting 6 parallel version endpoints only
+// runs one D1 scan per project (and one payload build per cache key) on a
+// cold KV miss. Different isolates still each do their own work, but KV
+// catches them on subsequent reads.
+const inflightPayloads = new Map<string, Promise<VersionIssuesPayload>>();
+const inflightProjectIssues = new Map<number, Promise<ProjectIssuesList>>();
+
+function memoizeInflight<K, V>(map: Map<K, Promise<V>>, key: K, fn: () => Promise<V>): Promise<V> {
+  const existing = map.get(key);
+  if (existing) return existing;
+  const p = (async () => {
+    try { return await fn(); } finally { map.delete(key); }
+  })();
+  map.set(key, p);
+  return p;
+}
+
+function loadProjectIssuesShared(env: Env, projectId: number): Promise<ProjectIssuesList> {
+  return memoizeInflight(inflightProjectIssues, projectId, () => listIssuesForProject(env, projectId));
+}
+
 async function buildVersionIssuesPayload(
   env: Env,
   version: VersionRow,
   page: number,
   perPage: number,
 ) {
-  const issues = await listIssuesForProject(env, version.project_id);
+  const issues = await loadProjectIssuesShared(env, version.project_id);
   const allRelated = issues.filter((i) => i.target_version === version.tag_name);
   const totalRelated = allRelated.length;
   const considered = Math.min(totalRelated, ISSUES_HARD_CAP);
@@ -401,13 +426,12 @@ async function refreshIssuesCache(
     return;
   }
   try {
-    const payload = await buildVersionIssuesPayload(env, version, page, perPage);
-    const entry: CachedEntry = { cached_at: new Date().toISOString(), payload: JSON.stringify(payload) };
-    await env.CACHE.put(
-      issuesCacheKey(version.id, page, perPage),
-      JSON.stringify(entry),
-      { expirationTtl: ISSUES_CACHE_TTL },
+    const cacheKey = issuesCacheKey(version.id, page, perPage);
+    const payload = await memoizeInflight(inflightPayloads, cacheKey, () =>
+      buildVersionIssuesPayload(env, version, page, perPage),
     );
+    const entry: CachedEntry = { cached_at: new Date().toISOString(), payload: JSON.stringify(payload) };
+    await env.CACHE.put(cacheKey, JSON.stringify(entry), { expirationTtl: ISSUES_CACHE_TTL });
   } catch (err) {
     console.error('[issues-cache] refresh failed', err);
   } finally {
@@ -436,7 +460,9 @@ async function getVersionIssuesWithCache(
     } catch { /* fall through */ }
   }
 
-  const payload = await buildVersionIssuesPayload(c.env, version, page, perPage);
+  const payload = await memoizeInflight(inflightPayloads, cacheKey, () =>
+    buildVersionIssuesPayload(c.env, version, page, perPage),
+  );
   const fresh: CachedEntry = { cached_at: new Date().toISOString(), payload: JSON.stringify(payload) };
   c.executionCtx.waitUntil(
     c.env.CACHE.put(cacheKey, JSON.stringify(fresh), { expirationTtl: ISSUES_CACHE_TTL }).catch((err) =>
