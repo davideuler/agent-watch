@@ -17,6 +17,12 @@ export interface UserRatingInput {
 
 export interface VersionForScore {
   publishedAt: string;
+  /**
+   * ISO timestamp of the next-newer release that superseded this one (i.e. the
+   * moment this version stopped being the "current" release). Omit/null for the
+   * live (newest) version — its exposure window runs up to `now`.
+   */
+  supersededAt?: string | null;
 }
 
 export interface PeerContext {
@@ -30,7 +36,10 @@ export interface StabilityResult {
   grade: StabilityGrade;
   breakdown: {
     ageHours: number;
+    exposureDays: number;
+    exposureFactor: number;
     weightedNegSum: number;
+    normalizedNegSum: number;
     weightedPosSum: number;
     riskIndex: number;
     baseScore: number;
@@ -72,6 +81,18 @@ const OTHER_DROP_MAX = 2.0;
 const OTHER_DROP_TAU = 3.0;
 const PEER_MEDIAN_FLOOR = 5.5;
 const MIN_SCORE = 1.0;
+// Exposure-time normalization. Risk in this model is a *sum* of release-linked
+// issue weight, so a release that stays current longer mechanically accumulates
+// more of it — biasing long-lived / popular releases toward lower scores even at
+// an equal per-day failure rate. We correct this with a ONE-SIDED deflator: with
+// GRACE ≈ REF, a fresh release gets factor ≈ 1 (never amplified — this is the
+// failure mode that got an earlier `riskSum / age` divisor removed), and only
+// releases live longer than the reference window get risk relief, floored so a
+// genuinely bad long-lived release is never fully exonerated. A release that
+// keeps generating issues still accrues risk ∝ days, so its rate stays high.
+const EXPOSURE_REF_DAYS = 30;
+const EXPOSURE_GRACE_DAYS = 30;
+const MIN_EXPOSURE_FACTOR = 0.5;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const GREY = '#9ca3af';
@@ -113,6 +134,13 @@ const WORKAROUND_WEIGHT: Record<WorkaroundStatus, number> = {
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/** One-sided exposure deflator in [MIN_EXPOSURE_FACTOR, 1]. See the constant block above for rationale. */
+function exposureDeflator(exposureDays: number): number {
+  const f =
+    (EXPOSURE_REF_DAYS + EXPOSURE_GRACE_DAYS) / (Math.max(0, exposureDays) + EXPOSURE_GRACE_DAYS);
+  return clamp(f, MIN_EXPOSURE_FACTOR, 1);
 }
 
 function rgbHex(r: number, g: number, b: number): string {
@@ -186,8 +214,15 @@ export function calculateStability(
   peerContext?: PeerContext,
 ): StabilityResult {
   const nowMs = now.getTime();
-  const ageMs = nowMs - new Date(version.publishedAt).getTime();
+  const publishedMs = new Date(version.publishedAt).getTime();
+  const ageMs = nowMs - publishedMs;
   const ageHours = ageMs / HOUR_MS;
+
+  // Exposure window: from publish until the next release superseded this one
+  // (or until `now` for the live version). Drives the one-sided risk deflator.
+  const exposureEndMs = version.supersededAt ? new Date(version.supersededAt).getTime() : nowMs;
+  const exposureDays = Math.max(0, (exposureEndMs - publishedMs) / DAY_MS);
+  const exposureFactor = exposureDeflator(exposureDays);
 
   if (ageMs < NEW_VERSION_GREY_HOURS * HOUR_MS) {
     return {
@@ -196,7 +231,10 @@ export function calculateStability(
       state: 'analyzing',
       breakdown: {
         ageHours: Math.round(ageHours * 10) / 10,
+        exposureDays: Math.round(exposureDays * 10) / 10,
+        exposureFactor: Math.round(exposureFactor * 1000) / 1000,
         weightedNegSum: 0,
+        normalizedNegSum: 0,
         weightedPosSum: 0,
         riskIndex: 0,
         baseScore: 5,
@@ -266,9 +304,11 @@ export function calculateStability(
   const effectiveCore = Math.max(0, weightedNegCoreSerious - coreCancel);
   const effectiveOther = Math.max(0, weightedNegOther - otherCancel);
 
-  const coreRiskIndex = effectiveCore;
+  // Deflate accumulated risk by the exposure factor (core + secondary buckets).
+  const coreRiskIndex = effectiveCore * exposureFactor;
   const coreScore = issues.length === 0 ? 5 : scoreFromRiskIndex(coreRiskIndex);
-  const otherDrop = OTHER_DROP_MAX * (1 - Math.exp(-effectiveOther / OTHER_DROP_TAU));
+  const otherDrop =
+    OTHER_DROP_MAX * (1 - Math.exp(-(effectiveOther * exposureFactor) / OTHER_DROP_TAU));
   const baseScore = issues.length === 0 ? 5 : Math.max(MIN_SCORE, coreScore - otherDrop);
 
   let final = baseScore;
@@ -305,7 +345,10 @@ export function calculateStability(
     grade,
     breakdown: {
       ageHours: Math.round(ageHours * 10) / 10,
+      exposureDays: Math.round(exposureDays * 10) / 10,
+      exposureFactor: Math.round(exposureFactor * 1000) / 1000,
       weightedNegSum: Math.round(totalWeightedNeg * 100) / 100,
+      normalizedNegSum: Math.round(totalWeightedNeg * exposureFactor * 100) / 100,
       weightedPosSum: Math.round(weightedPos * 100) / 100,
       riskIndex: Math.round(coreRiskIndex * 1000) / 1000,
       baseScore: Math.round(baseScore * 10) / 10,

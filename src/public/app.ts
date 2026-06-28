@@ -1,4 +1,10 @@
-import { formatReleaseDate, getReleaseDisplay, googleAnalyticsScriptSrc } from './release-display';
+import {
+  formatCompactCount,
+  formatReleaseDate,
+  getReleaseDisplay,
+  googleAnalyticsScriptSrc,
+  reportsPerThousandDownloads,
+} from './release-display';
 
 interface ProjectListItem {
   slug: string;
@@ -23,6 +29,9 @@ interface Stability {
     topRiskFactor: string;
     ratingAvg: number | null;
     ratingCount: number;
+    exposureDays: number;
+    exposureFactor: number;
+    normalizedNegSum: number;
   };
 }
 
@@ -38,10 +47,18 @@ interface VersionItem {
   stability: Stability;
   issue_count: number;
   rating_count: number;
+  download_count: number | null;
 }
 
 interface ProjectDetail {
-  project: { slug: string; name: string; github_repo: string; github_url: string };
+  project: {
+    slug: string;
+    name: string;
+    github_repo: string;
+    github_url: string;
+    stargazers_count?: number | null;
+    usage_updated_at?: string | null;
+  };
   versions: VersionItem[];
 }
 
@@ -421,7 +438,17 @@ function applyProjectDetail(data: ProjectDetail): void {
   const versionsEl = $('#versions')!;
   $('#project-title')!.textContent = `${data.project.name} releases`;
   const meta = $('#project-meta')!;
-  meta.innerHTML = `Tracking <a href="${data.project.github_url}" target="_blank" rel="noreferrer">${escapeHtml(data.project.github_repo)}</a> · ${data.versions.length} version${data.versions.length === 1 ? '' : 's'} mapped`;
+  const stars = formatCompactCount(data.project.stargazers_count);
+  const headerParts = [
+    `Tracking <a href="${data.project.github_url}" target="_blank" rel="noreferrer">${escapeHtml(data.project.github_repo)}</a>`,
+    `${data.versions.length} version${data.versions.length === 1 ? '' : 's'} mapped`,
+    stars ? `★ ${stars} stars` : null,
+  ].filter(Boolean);
+  // Honest disclosure: the score is a time-normalized risk rate, but we cannot
+  // normalize by install base (per-version download data is absent for most releases).
+  meta.innerHTML =
+    `${headerParts.join(' · ')}` +
+    `<span class="usage-caveat">Stability reflects issue reports over each release's live window — not adjusted for install base.</span>`;
   renderProjectStats(data);
 
   if (data.versions.length === 0) {
@@ -562,11 +589,24 @@ function renderVersionCard(v: VersionItem, slug: string): HTMLElement {
   fill.style.width = `${(v.stability.score / 10) * 100}%`;
   fill.style.background = v.stability.color;
 
+  const b = v.stability.breakdown;
+  // Make clear the score is a risk *rate* over the release's live window, not a raw
+  // count — so a long-lived release isn't read as unstable just for accumulating reports.
+  const exposureLabel =
+    b.negativeCount > 0 && b.exposureDays >= 1
+      ? `${b.negativeCount} report${b.negativeCount === 1 ? '' : 's'} over ${Math.round(b.exposureDays)}d live${b.exposureFactor < 0.999 ? ' · time-normalized' : ''}`
+      : null;
+  // Usage-normalized companion metric — only where download data exists (NULL for
+  // source-only releases), so adoption isn't conflated with instability.
+  const per1k = reportsPerThousandDownloads(b.negativeCount, v.download_count);
+  const downloadLabel = per1k != null ? `${per1k} reports/1k downloads` : null;
   const metaParts = [
     `Released ${formatDate(v.published_at)} · ${timeAgo(v.published_at)}`,
     v.is_prerelease ? 'pre-release' : null,
-    v.stability.breakdown.topRiskFactor,
-    v.stability.breakdown.positiveCount > 0 ? `${v.stability.breakdown.positiveCount} positive` : null,
+    b.topRiskFactor,
+    exposureLabel,
+    downloadLabel,
+    b.positiveCount > 0 ? `${b.positiveCount} positive` : null,
   ].filter(Boolean);
   $('.vc-meta', node)!.textContent = metaParts.join(' · ');
 

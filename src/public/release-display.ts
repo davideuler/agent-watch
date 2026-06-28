@@ -35,6 +35,27 @@ export function formatReleaseDate(iso: string, locale?: string): string {
   return d.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
+/** Compact count for adoption/usage display: 1234 → "1.2k", 1_200_000 → "1.2M". */
+export function formatCompactCount(n: number | null | undefined): string | null {
+  if (n == null || !Number.isFinite(n) || n < 0) return null;
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1_000_000) return `${Math.round(n / 100) / 10}k`;
+  return `${Math.round(n / 100_000) / 10}M`;
+}
+
+/**
+ * Usage-normalized companion metric: negative reports per 1k uploaded-asset
+ * downloads. Returns null when there is no download signal (source-only release),
+ * so callers can show the raw score with an "install base unknown" caveat instead.
+ */
+export function reportsPerThousandDownloads(
+  negativeCount: number,
+  downloadCount: number | null | undefined,
+): number | null {
+  if (downloadCount == null || downloadCount <= 0) return null;
+  return Math.round((negativeCount / downloadCount) * 1000 * 100) / 100;
+}
+
 function extractReleaseVersion(name: string): string | null {
   const match = name.match(VERSION_PATTERN);
   return match?.[0] ?? null;

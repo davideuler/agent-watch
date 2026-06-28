@@ -1,12 +1,13 @@
 import type { Env } from './types';
 import { getProjects } from './config';
-import { fetchIssueComments, fetchIssues, fetchReleases, type GhRelease } from './github';
+import { fetchIssueComments, fetchIssues, fetchReleases, fetchRepoMeta, type GhRelease } from './github';
 import { analyzeIssue } from './llm';
 import {
   getPollState,
   listVersions,
   setAnalysis,
   setPollState,
+  updateProjectUsage,
   upsertComment,
   upsertIssue,
   upsertProject,
@@ -19,6 +20,14 @@ function bestDownloadUrl(rel: GhRelease): string | null {
     return sorted[0]!.browser_download_url;
   }
   return rel.tarball_url ?? rel.zipball_url ?? rel.html_url;
+}
+
+// Sum of uploaded-asset downloads. NULL (not 0) for source-only releases, since
+// GitHub does not count auto tarball/zipball traffic — keeps "no signal" distinct
+// from "had assets, zero downloads".
+function totalDownloads(rel: GhRelease): number | null {
+  if (rel.assets.length === 0) return null;
+  return rel.assets.reduce((sum, a) => sum + (a.download_count ?? 0), 0);
 }
 
 export async function pollOnce(env: Env): Promise<{ project: string; releases: number; issues: number; analyses: number }[]> {
@@ -44,12 +53,28 @@ export async function pollOnce(env: Env): Promise<{ project: string; releases: n
           download_url: bestDownloadUrl(r),
           published_at: r.published_at,
           is_prerelease: r.prerelease,
-          raw_json: JSON.stringify({ id: r.id, assets: r.assets.map((a) => ({ name: a.name, url: a.browser_download_url })) }),
+          raw_json: JSON.stringify({
+            id: r.id,
+            assets: r.assets.map((a) => ({
+              name: a.name,
+              url: a.browser_download_url,
+              download_count: a.download_count,
+            })),
+          }),
+          download_count: totalDownloads(r),
         });
         releaseCount++;
       }
     } catch (err) {
       console.error(`[poll] ${p.slug} releases failed`, err);
+    }
+
+    // Repo-level adoption proxy (display-only usage context; never fed to the score).
+    try {
+      const meta = await fetchRepoMeta(env, p.repo);
+      await updateProjectUsage(env, project.id, meta.stargazers_count, new Date().toISOString());
+    } catch (err) {
+      console.error(`[poll] ${p.slug} repo meta failed`, err);
     }
 
     const versions = await listVersions(env, project.id, 15);

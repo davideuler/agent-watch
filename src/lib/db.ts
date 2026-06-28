@@ -24,6 +24,17 @@ export async function upsertProject(env: Env, slug: string, name: string, repo: 
   return row;
 }
 
+export async function updateProjectUsage(
+  env: Env,
+  projectId: number,
+  stargazersCount: number,
+  updatedAt: string,
+): Promise<void> {
+  await env.DB.prepare('UPDATE projects SET stargazers_count = ?, usage_updated_at = ? WHERE id = ?')
+    .bind(stargazersCount, updatedAt, projectId)
+    .run();
+}
+
 export async function listVersions(env: Env, projectId: number, limit = 15): Promise<VersionRow[]> {
   const r = await env.DB.prepare(
     'SELECT * FROM versions WHERE project_id = ? ORDER BY published_at DESC LIMIT ?',
@@ -61,15 +72,17 @@ export interface UpsertVersionInput {
   published_at: string;
   is_prerelease: boolean;
   raw_json: string | null;
+  download_count: number | null;
 }
 
 export async function upsertVersion(env: Env, v: UpsertVersionInput): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO versions (project_id, tag_name, name, body, html_url, download_url, published_at, is_prerelease, raw_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO versions (project_id, tag_name, name, body, html_url, download_url, published_at, is_prerelease, raw_json, download_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(project_id, tag_name) DO UPDATE SET
        name=excluded.name, body=excluded.body, html_url=excluded.html_url, download_url=excluded.download_url,
-       published_at=excluded.published_at, is_prerelease=excluded.is_prerelease, raw_json=excluded.raw_json`,
+       published_at=excluded.published_at, is_prerelease=excluded.is_prerelease, raw_json=excluded.raw_json,
+       download_count=excluded.download_count`,
   )
     .bind(
       v.project_id,
@@ -81,6 +94,7 @@ export async function upsertVersion(env: Env, v: UpsertVersionInput): Promise<vo
       v.published_at,
       v.is_prerelease ? 1 : 0,
       v.raw_json,
+      v.download_count,
     )
     .run();
 }

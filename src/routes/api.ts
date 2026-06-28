@@ -147,8 +147,17 @@ async function computeProjectPayload(env: Env, slug: string): Promise<string | n
     };
   });
 
-  const pass1 = inputs.map((inp) =>
-    calculateStability({ publishedAt: inp.v.published_at }, inp.versionIssues, inp.ratings, inp.scoreNow),
+  // versions are ordered published_at DESC, so the next-newer release (which
+  // superseded this one) sits at idx-1; idx 0 is the live version (no successor).
+  const supersededAtFor = (idx: number): string | null => versions[idx - 1]?.published_at ?? null;
+
+  const pass1 = inputs.map((inp, idx) =>
+    calculateStability(
+      { publishedAt: inp.v.published_at, supersededAt: supersededAtFor(idx) },
+      inp.versionIssues,
+      inp.ratings,
+      inp.scoreNow,
+    ),
   );
   const matureNegSums = pass1
     .filter((s) => s.state === 'rated' && s.breakdown.negativeCount > 0)
@@ -163,10 +172,10 @@ async function computeProjectPayload(env: Env, slug: string): Promise<string | n
     peerContext = { medianWeightedNeg: median };
   }
 
-  const versionsWithScore = inputs.map((inp) => {
+  const versionsWithScore = inputs.map((inp, idx) => {
     const v = inp.v;
     const stability = calculateStability(
-      { publishedAt: v.published_at },
+      { publishedAt: v.published_at, supersededAt: supersededAtFor(idx) },
       inp.versionIssues,
       inp.ratings,
       inp.scoreNow,
@@ -185,6 +194,10 @@ async function computeProjectPayload(env: Env, slug: string): Promise<string | n
       stability,
       issue_count: versionIssues.length,
       rating_count: (ratingsByVersion.get(v.id) ?? []).length,
+      // Display-only usage context (NULL for source-only releases). The frontend
+      // derives a "reports per 1k downloads" companion metric; the score itself
+      // is never normalized by this — see score.ts exposure normalization.
+      download_count: v.download_count ?? null,
     };
   });
 
@@ -194,6 +207,8 @@ async function computeProjectPayload(env: Env, slug: string): Promise<string | n
       name: project.name,
       github_repo: project.github_repo,
       github_url: project.github_url,
+      stargazers_count: project.stargazers_count ?? null,
+      usage_updated_at: project.usage_updated_at ?? null,
     },
     versions: versionsWithScore,
   };

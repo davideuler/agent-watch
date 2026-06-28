@@ -389,6 +389,13 @@ a:hover {
   grid-column: 1;
   align-self: start;
 }
+.usage-caveat {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.72rem;
+  opacity: 0.7;
+  font-style: italic;
+}
 #project-meta a {
   color: var(--text-mute);
   border-bottom: 1px solid var(--border-strong);

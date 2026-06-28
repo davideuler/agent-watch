@@ -36,6 +36,9 @@ export interface ProjectRow {
   github_repo: string;
   github_url: string;
   created_at: string;
+  /** Repo stargazers — display-only adoption proxy, not fed into the score. */
+  stargazers_count: number | null;
+  usage_updated_at: string | null;
 }
 
 export interface VersionRow {
@@ -49,6 +52,8 @@ export interface VersionRow {
   published_at: string;
   is_prerelease: number;
   raw_json: string | null;
+  /** Sum of uploaded-asset downloads; NULL = no signal (source-only release). */
+  download_count: number | null;
 }
 
 export interface IssueRow {

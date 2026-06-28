@@ -357,6 +357,77 @@ async function main() {
     lowSignal,
   );
 
+  // ── Phase 1: exposure-time normalization ──────────────────────────────────
+  const coreSerious = (created_at) => ({
+    sentiment: 'negative',
+    confidence: 0.9,
+    comment_count: 8,
+    created_at,
+    severity: 'high',
+    impact_scope: 'broad',
+    functionality: 'core',
+    affected_user_share: 'many',
+    duplicate_cluster_size: 1,
+    workaround_status: 'none',
+  });
+
+  // Case 17: a fresh / short-lived release must never be amplified — its exposure
+  // factor stays ~1 (this is the failure mode that got an earlier age-divisor removed).
+  const freshExposure = calculateStability(
+    { publishedAt: '2026-05-06T00:00:00Z' }, // ~3 days before `now`, live (no supersededAt)
+    [coreSerious('2026-05-07T00:00:00Z')],
+    [],
+    now,
+  );
+  assert(
+    freshExposure.breakdown.exposureFactor >= 0.95 && freshExposure.breakdown.exposureFactor <= 1,
+    'fresh/short-lived release exposureFactor must be ~1 (never amplified)',
+    freshExposure,
+  );
+
+  // Case 18: identical front-loaded issues — a long-lived release (live 180d) must
+  // score STRICTLY HIGHER than the same issues confined to a 30-day window. Issue
+  // created_at and `now` are held constant so only the exposure window differs,
+  // isolating the deflator from recency decay.
+  const shortWindow = calculateStability(
+    { publishedAt: '2026-04-08T00:00:00Z', supersededAt: '2026-05-08T00:00:00Z' }, // 30d live
+    [coreSerious('2026-04-20T00:00:00Z'), coreSerious('2026-04-21T00:00:00Z')],
+    [],
+    now,
+  );
+  const longWindow = calculateStability(
+    { publishedAt: '2025-11-09T00:00:00Z', supersededAt: '2026-05-08T00:00:00Z' }, // 180d live
+    [coreSerious('2026-04-20T00:00:00Z'), coreSerious('2026-04-21T00:00:00Z')],
+    [],
+    now,
+  );
+  assert(
+    longWindow.score > shortWindow.score,
+    'long-lived release with the same front-loaded issues should score higher than a 30-day window',
+    { shortWindow, longWindow },
+  );
+
+  // Case 19: exposureFactor is one-sided and floored — always within [0.5, 1].
+  assert(
+    longWindow.breakdown.exposureFactor >= 0.5 &&
+      longWindow.breakdown.exposureFactor <= 1 &&
+      shortWindow.breakdown.exposureFactor >= 0.5 &&
+      shortWindow.breakdown.exposureFactor <= 1,
+    'exposureFactor must stay within [MIN_EXPOSURE_FACTOR=0.5, 1]',
+    { shortWindow, longWindow },
+  );
+
+  // Case 20: exposure breakdown fields are exposed for the dual-label UI.
+  assert(
+    typeof longWindow.breakdown.exposureDays === 'number' &&
+      typeof longWindow.breakdown.exposureFactor === 'number' &&
+      typeof longWindow.breakdown.normalizedNegSum === 'number' &&
+      longWindow.breakdown.exposureDays >= 175 &&
+      longWindow.breakdown.normalizedNegSum < longWindow.breakdown.weightedNegSum,
+    'breakdown surfaces numeric exposureDays/exposureFactor/normalizedNegSum (normalized < raw for long-lived)',
+    longWindow,
+  );
+
   console.log('✔ smoke tests pass');
   await rm(tmpDir, { recursive: true, force: true });
 }

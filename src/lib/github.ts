@@ -16,6 +16,7 @@ export interface GhRelease {
     name: string;
     browser_download_url: string;
     size: number;
+    download_count: number;
   }>;
   tarball_url: string | null;
   zipball_url: string | null;
@@ -60,6 +61,17 @@ async function ghFetch<T>(env: Env, url: string): Promise<T> {
     throw new Error(`GitHub ${res.status} ${res.statusText} — ${url} — ${body.slice(0, 300)}`);
   }
   return res.json() as Promise<T>;
+}
+
+export interface GhRepoMeta {
+  stargazers_count: number;
+  subscribers_count?: number;
+  open_issues_count?: number;
+}
+
+/** Repo-level metadata (adoption proxy). Used for display-only usage context. */
+export async function fetchRepoMeta(env: Env, repo: string): Promise<GhRepoMeta> {
+  return ghFetch<GhRepoMeta>(env, `${API_ROOT}/repos/${repo}`);
 }
 
 export async function fetchReleases(env: Env, repo: string, limit = 15): Promise<GhRelease[]> {
